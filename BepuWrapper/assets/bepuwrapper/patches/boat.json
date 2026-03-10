@@ -1,0 +1,14 @@
+[
+  {
+    "file": "game:entities/nonliving/boat-sailed",
+    "op": "addmerge",
+    "path": "/server/behaviors",
+    "value": [ { "code": "bepu-physics" } ]
+  }
+  //{
+  //  "file": "game:entities/nonliving/boat-sailed",
+  //  "op": "add",
+  //  "path": "/client/behaviors",
+  //  "value": [ { "code": "bepu-physics" } ]
+  //}
+]

@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="BepuWrapper/BepuWrapper.csproj" />
+  <Project Path="CakeBuild/CakeBuild.csproj" />
+</Solution>
