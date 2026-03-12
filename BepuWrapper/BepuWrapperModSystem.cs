@@ -22,13 +22,13 @@ namespace BepuWrapper
         {
             var harmony = new Harmony(Mod.Info.ModID);
             harmony.PatchAll();
+            bepu = new BepuWorld(api);
             Mod.Logger.Notification("Hello from template mod: " + api.Side);
             api.RegisterEntityBehaviorClass("bepu-physics", typeof(BepuPhysicsBehaviour));
         }
 
         public override void StartServerSide(ICoreServerAPI api)
         {
-            bepu = new BepuWorld(api);
             Mod.Logger.Notification("Hello from template mod server side: " + Lang.Get("bepuwrapper:hello"));
         }
 

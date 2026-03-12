@@ -17,7 +17,7 @@ namespace BepuWrapper
 {
     public sealed class BepuWorld : IDisposable
     {
-        private readonly ICoreServerAPI api;
+        private readonly ICoreAPI api;
 
         public readonly BufferPool pool = new BufferPool();
         public Simulation sim;
@@ -37,7 +37,7 @@ namespace BepuWrapper
 
         private List<BodyHandle> bodies = new List<BodyHandle>();
 
-        public BepuWorld(ICoreServerAPI api)
+        public BepuWorld(ICoreAPI api)
         {
             this.api = api;
 
@@ -52,9 +52,10 @@ namespace BepuWrapper
             unitSphereShape = sim.Shapes.Add(unitSphere);
 
             // Initial build around spawn or first player.
-
-            api.Event.PlayerJoin += (player) => RebuildRegionAroundPlayer(player, radiusChunks: 2);
-            //api.Event.PlayerDeath += (player, src) => BounceABall(player);
+            //if (api is ICoreServerAPI sapi) 
+            //{
+            //    sapi.Event.PlayerJoin += (player) => RebuildRegionAroundPlayer(player, radiusChunks: 2);
+            //}
 
             api.Event.RegisterGameTickListener(Tick, 0);
         }

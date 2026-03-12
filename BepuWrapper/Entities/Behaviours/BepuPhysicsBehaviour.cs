@@ -5,19 +5,17 @@ using BepuUtilities.Memory;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
-using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
-using Vintagestory.API.Server;
 
 namespace BepuWrapper.Entities.Behaviours
 {
     public class BepuPhysicsBehaviour : EntityBehavior
     {
-        private ICoreClientAPI capi;
-        private ICoreServerAPI sapi;
+        private ICoreAPI api;
+        private BepuWrapperModSystem physics;
 
         private TypedIndex compoundShapeIndex;
         private Vector3 localCenterOfMassOffset;
@@ -37,72 +35,65 @@ namespace BepuWrapper.Entities.Behaviours
         {
             base.Initialize(properties, attributes);
 
-            if (entity.World.Side == EnumAppSide.Server)
+            api = entity.Api;
+            physics = api.ModLoader.GetModSystem<BepuWrapperModSystem>();
+
+            var shape = entity.Properties.Client.Shape;
+            var shapeLoc = shape.Base.Clone();
+            shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
+
+            CachedCompound? cachedShape = physics.bepu.TryGetCompoundShape(shapeLoc.Path);
+
+            if (cachedShape == null)
             {
-                sapi = (ICoreServerAPI)entity.Api;
-                var physics = sapi.ModLoader.GetModSystem<BepuWrapperModSystem>();
-
-                var shape = entity.Properties.Client.Shape;
-                var shapeLoc = shape.Base.Clone();
-                shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
-
-                CachedCompound? cachedShape = physics.bepu.TryGetCompoundShape(shapeLoc.Path);
-
-                if (cachedShape == null)
+                var asset = api.Assets.TryGet(shapeLoc);
+                if (asset == null)
                 {
-                    var asset = sapi.Assets.TryGet(shapeLoc);
-                    if (asset == null)
-                    {
-                        sapi.Logger.Warning("[bepuwrapper] Missing shape asset {0} for entity {1}", shapeLoc, entity.Code);
-                        return;
-                    }
-
-                    var compoundShape = asset.ToObject<Shape>();
-                    if (compoundShape == null || compoundShape.Elements == null || compoundShape.Elements.Length == 0)
-                    {
-                        sapi.Logger.Warning("[bepuwrapper] Entity {0} has no loaded shape elements.", entity.Code);
-                        return;
-                    }
-
-                    var built = BuildCompoundFromShape(compoundShape, physics.bepu.sim.Shapes, physics.bepu.pool);
-                    cachedShape = physics.bepu.AddCompoundShape(shapeLoc.Path, built);
+                    api.Logger.Warning("[bepuwrapper] Missing shape asset {0} for entity {1}", shapeLoc, entity.Code);
+                    return;
                 }
 
-                compoundShapeIndex = cachedShape.Value.CompoundIndex;
-                localCenterOfMassOffset = cachedShape.Value.LocalCenterOfMassOffset;
+                var compoundShape = asset.ToObject<Shape>();
+                if (compoundShape == null || compoundShape.Elements == null || compoundShape.Elements.Length == 0)
+                {
+                    api.Logger.Warning("[bepuwrapper] Entity {0} has no loaded shape elements.", entity.Code);
+                    return;
+                }
 
-                manualChildBoxes.Clear();
-                manualChildBoxes.AddRange(cachedShape.Value.ManualChildBoxes);
-                compoundBroadphaseRadius = cachedShape.Value.BroadphaseRadius;
-
-                var bodyPose = new RigidPose(
-                    ToBepu(entity.Pos.X, entity.Pos.Y, entity.Pos.Z) + localCenterOfMassOffset,
-                    Quaternion.Identity
-                );
-
-                var bodyDescription = BodyDescription.CreateDynamic(
-                    bodyPose.Position,
-                    cachedShape.Value.Inertia,
-                    compoundShapeIndex,
-                    0.05f
-                );
-
-                physics.bepu.RegisterEntityBody(entity, bodyDescription, localCenterOfMassOffset);
-
-                lastBodyOrigin = bodyPose.Position;
-                hadLastBodyOrigin = true;
+                var built = BuildCompoundFromShape(compoundShape, physics.bepu.sim.Shapes, physics.bepu.pool);
+                cachedShape = physics.bepu.AddCompoundShape(shapeLoc.Path, built);
             }
-            else
-            {
-                capi = (ICoreClientAPI)entity.Api;
-            }
+
+            compoundShapeIndex = cachedShape.Value.CompoundIndex;
+            localCenterOfMassOffset = cachedShape.Value.LocalCenterOfMassOffset;
+
+            manualChildBoxes.Clear();
+            manualChildBoxes.AddRange(cachedShape.Value.ManualChildBoxes);
+            compoundBroadphaseRadius = cachedShape.Value.BroadphaseRadius;
+
+            var bodyPose = new RigidPose(
+                ToBepu(entity.Pos.X, entity.Pos.Y, entity.Pos.Z) + localCenterOfMassOffset,
+                Quaternion.Identity
+            );
+
+            var bodyDescription = BodyDescription.CreateDynamic(
+                bodyPose.Position,
+                cachedShape.Value.Inertia,
+                compoundShapeIndex,
+                0.05f
+            );
+
+            physics.bepu.RegisterEntityBody(entity, bodyDescription, localCenterOfMassOffset);
+
+            lastBodyOrigin = bodyPose.Position;
+            hadLastBodyOrigin = true;
         }
 
         public override void OnGameTick(float deltaTime)
         {
             base.OnGameTick(deltaTime);
 
-            if (sapi == null || !entity.Alive || manualChildBoxes.Count == 0)
+            if (api == null || !entity.Alive || manualChildBoxes.Count == 0)
                 return;
 
             pushAccum += deltaTime;
@@ -119,8 +110,6 @@ namespace BepuWrapper.Entities.Behaviours
 
         private void PushNearbyEntitiesOutOfCompound(float deltaTime)
         {
-            var physics = sapi.ModLoader.GetModSystem<BepuWrapperModSystem>();
-
             Vector3 boatWorldOrigin = ToBepu(entity.Pos.X, entity.Pos.Y, entity.Pos.Z) + localCenterOfMassOffset;
             Quaternion boatWorldOrientation = Quaternion.Identity;
 
