@@ -254,9 +254,21 @@ namespace BepuWrapper.Entities.Behaviours
             if (MathF.Abs(totalCorrection.Z) > axisEpsilon)
                 motion.Z = 0f;
 
-            other.SidedPos.Motion.X = motion.X;
-            other.SidedPos.Motion.Y = motion.Y;
-            other.SidedPos.Motion.Z = motion.Z;
+            if (other is EntityPlayer)
+            {
+                other.WatchedAttributes.SetDouble("rbodirX", motion.X);
+                other.WatchedAttributes.SetDouble("rbodirY", motion.Y);
+                other.WatchedAttributes.SetDouble("rbodirZ", motion.Z);
+                other.WatchedAttributes.SetFloat("bodyDeltaX", bodyDelta.X);
+                other.WatchedAttributes.SetFloat("bodyDeltaY", bodyDelta.Y);
+                other.WatchedAttributes.SetFloat("bodyDeltaZ", bodyDelta.Z);
+                other.WatchedAttributes.SetBool("pushedUp", pushedUp);
+                other.WatchedAttributes.SetInt("physcoll", 1);
+                return;
+            }
+
+            other.SidedPos.Motion.Set(motion.X, motion.Y, motion.Z);
+
 
             // Equivalent to carrying entity along with moving rigid body if standing on it.
             if (pushedUp && bodyDelta.LengthSquared() > 1e-9f)
@@ -264,13 +276,8 @@ namespace BepuWrapper.Entities.Behaviours
                 Vector3 horizontalDelta = new Vector3(bodyDelta.X, 0f, bodyDelta.Z) * 0.5f;
                 Vector3 verticalDelta = new Vector3(0f, bodyDelta.Y, 0f);
 
-                other.SidedPos.X += horizontalDelta.X + verticalDelta.X;
-                other.SidedPos.Y += horizontalDelta.Y + verticalDelta.Y;
-                other.SidedPos.Z += horizontalDelta.Z + verticalDelta.Z;
-
-                other.SidedPos.Motion.X += horizontalDelta.X + verticalDelta.X;
-                other.SidedPos.Motion.Y += horizontalDelta.Y + verticalDelta.Y;
-                other.SidedPos.Motion.Z += horizontalDelta.Z + verticalDelta.Z;
+                other.SidedPos.Add(horizontalDelta.X + verticalDelta.X, horizontalDelta.Y + verticalDelta.Y, horizontalDelta.Z + verticalDelta.Z);
+                other.SidedPos.Motion.Add(horizontalDelta.X + verticalDelta.X, horizontalDelta.Y + verticalDelta.Y, horizontalDelta.Z + verticalDelta.Z);
 
                 other.OnGround = true;
             }
@@ -625,7 +632,7 @@ namespace BepuWrapper.Entities.Behaviours
                         ShapeIndex = shapeIndex
                     });
 
-                    if (width >= 0.15f && height >= 0.15f && length >= 0.15f)
+                    if (width >= 0.05f && height >= 0.05f && length >= 0.05f)
                     {
                         manualBoxes.Add(new ManualChildBox
                         {
