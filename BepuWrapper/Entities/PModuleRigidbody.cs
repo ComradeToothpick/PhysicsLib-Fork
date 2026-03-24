@@ -1,12 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Numerics;
-using System.Text;
-using System.Threading.Tasks;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
+using Vintagestory.API.MathTools;
 
 namespace BepuWrapper.Entities
 {
@@ -35,28 +32,20 @@ namespace BepuWrapper.Entities
                 double motionX = entity.WatchedAttributes.GetDouble("rbodirX");
                 double motionY = entity.WatchedAttributes.GetDouble("rbodirY");
                 double motionZ = entity.WatchedAttributes.GetDouble("rbodirZ");
-                float bodyDeltaX = entity.WatchedAttributes.GetFloat("bodyDeltaX");
-                float bodyDeltaY = entity.WatchedAttributes.GetFloat("bodyDeltaY");
-                float bodyDeltaZ = entity.WatchedAttributes.GetFloat("bodyDeltaZ");
+                double offsetX = entity.WatchedAttributes.GetDouble("offX");
+                double offsetY = entity.WatchedAttributes.GetDouble("offY");
+                double offsetZ = entity.WatchedAttributes.GetDouble("offZ");
                 bool pushedUp = entity.WatchedAttributes.GetBool("pushedUp");
+                Vec3d motion = new Vec3d(motionX, motionY, motionZ);
+                pos.Motion.Set(motion);
 
-                Vector3 bodyDelta = new Vector3(bodyDeltaX, bodyDeltaY, bodyDeltaZ);
-                pos.Motion.Set(motionX, motionY, motionZ);
-
-                // Equivalent to carrying entity along with moving rigid body if standing on it.
-                if (pushedUp && bodyDelta.LengthSquared() > 1e-9f)
-                {
-                    Vector3 horizontalDelta = new Vector3(bodyDelta.X, 0f, bodyDelta.Z) * 0.5f;
-                    Vector3 verticalDelta = new Vector3(0f, bodyDelta.Y, 0f);
-
-                    //pos.Add(horizontalDelta.X + verticalDelta.X, horizontalDelta.Y + verticalDelta.Y, horizontalDelta.Z + verticalDelta.Z);
-                    pos.SetPos(pos.X + horizontalDelta.X + verticalDelta.X, pos.Y + horizontalDelta.Y + verticalDelta.Y, pos.Z + horizontalDelta.Z + verticalDelta.Z);
-                    pos.Motion.Add(horizontalDelta.X + verticalDelta.X, horizontalDelta.Y + verticalDelta.Y, horizontalDelta.Z + verticalDelta.Z);
-
-                }
+                //pos.SetPos(pos.X + offsetX, pos.Y + offsetY, pos.Z + offsetZ);
+                
                 entity.OnGround = true;
 
                 entity.WatchedAttributes.SetInt("physcoll", 0);
+
+
             }
         }
     }

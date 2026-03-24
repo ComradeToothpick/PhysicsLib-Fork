@@ -12,7 +12,7 @@ using Vintagestory.API.MathTools;
 
 namespace BepuWrapper.Entities.Behaviours
 {
-    public class BepuPhysicsBehaviour : EntityBehavior
+    public class BepuPhysicsBehaviour : PhysicsBehaviorBase
     {
         private ICoreAPI api;
         private BepuWrapperModSystem physics;
@@ -96,19 +96,12 @@ namespace BepuWrapper.Entities.Behaviours
             if (api == null || !entity.Alive || manualChildBoxes.Count == 0)
                 return;
 
-            pushAccum += deltaTime;
-            if (pushAccum < 0.05f)
-                return;
-
-            float dt = pushAccum;
-            pushAccum = 0f;
-
-            PushNearbyEntitiesOutOfCompound(dt);
+            PushNearbyEntitiesOutOfCompound();
         }
 
         public override string PropertyName() => "bepu-physics";
 
-        private void PushNearbyEntitiesOutOfCompound(float deltaTime)
+        private void PushNearbyEntitiesOutOfCompound()
         {
             Vector3 boatWorldOrigin = ToBepu(entity.Pos.X, entity.Pos.Y, entity.Pos.Z) + localCenterOfMassOffset;
             Quaternion boatWorldOrientation = Quaternion.Identity;
@@ -143,7 +136,7 @@ namespace BepuWrapper.Entities.Behaviours
 
             foreach (var other in nearby)
             {
-                ResolveEntityAgainstCompound(other, boatWorldOrigin, boatWorldOrientation, bodyDelta, deltaTime);
+                ResolveEntityAgainstCompound(other, boatWorldOrigin, boatWorldOrientation, bodyDelta);
             }
         }
 
@@ -151,8 +144,7 @@ namespace BepuWrapper.Entities.Behaviours
             Entity other,
             Vector3 boatWorldOrigin,
             Quaternion boatWorldOrientation,
-            Vector3 bodyDelta,
-            float deltaTime)
+            Vector3 bodyDelta)
         {
             Cuboidf box = other.CollisionBox;
             if (box == null)
@@ -199,7 +191,7 @@ namespace BepuWrapper.Entities.Behaviours
                 return;
 
             // Small slop to reduce jitter at contact.
-            const float slop = 0.001f;
+            const float slop = 0f;
             if (correctionLen > slop)
             {
                 totalCorrection = bestNormal * (correctionLen - slop);
@@ -224,7 +216,7 @@ namespace BepuWrapper.Entities.Behaviours
                 (float)other.SidedPos.Motion.Z
             );
 
-            const float axisEpsilon = 0.0001f;
+            const float axisEpsilon = 0f;
 
             if (MathF.Abs(totalCorrection.X) > axisEpsilon)
                 motion.X = 0f;
@@ -243,33 +235,23 @@ namespace BepuWrapper.Entities.Behaviours
             if (MathF.Abs(totalCorrection.Z) > axisEpsilon)
                 motion.Z = 0f;
 
+            //if (motion.LengthSquared() < 1e-9f) return;
+
             if (other is EntityPlayer)
             {
                 other.WatchedAttributes.SetDouble("rbodirX", motion.X);
                 other.WatchedAttributes.SetDouble("rbodirY", motion.Y);
                 other.WatchedAttributes.SetDouble("rbodirZ", motion.Z);
-                other.WatchedAttributes.SetFloat("bodyDeltaX", bodyDelta.X);
-                other.WatchedAttributes.SetFloat("bodyDeltaY", bodyDelta.Y);
-                other.WatchedAttributes.SetFloat("bodyDeltaZ", bodyDelta.Z);
+                other.WatchedAttributes.SetDouble("offX", totalCorrection.X);
+                other.WatchedAttributes.SetDouble("offY", totalCorrection.Y);
+                other.WatchedAttributes.SetDouble("offZ", totalCorrection.Z);
                 other.WatchedAttributes.SetBool("pushedUp", pushedUp);
                 other.WatchedAttributes.SetInt("physcoll", 1);
                 return;
             }
 
             other.SidedPos.Motion.Set(motion.X, motion.Y, motion.Z);
-
-
-            // Equivalent to carrying entity along with moving rigid body if standing on it.
-            if (pushedUp && bodyDelta.LengthSquared() > 1e-9f)
-            {
-                Vector3 horizontalDelta = new Vector3(bodyDelta.X, 0f, bodyDelta.Z) * 0.5f;
-                Vector3 verticalDelta = new Vector3(0f, bodyDelta.Y, 0f);
-
-                other.SidedPos.Add(horizontalDelta.X + verticalDelta.X, horizontalDelta.Y + verticalDelta.Y, horizontalDelta.Z + verticalDelta.Z);
-                other.SidedPos.Motion.Add(horizontalDelta.X + verticalDelta.X, horizontalDelta.Y + verticalDelta.Y, horizontalDelta.Z + verticalDelta.Z);
-
-                other.OnGround = true;
-            }
+            other.OnGround = true;
         }
 
         private Vector3 ComputeCompoundPushoutForSphere(
