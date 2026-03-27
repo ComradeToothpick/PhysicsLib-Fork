@@ -16,7 +16,9 @@ namespace BepuWrapper.Entities.Behaviours
     {
         private ICoreAPI api;
         private BepuWrapperModSystem physics;
+        private string[] config;
 
+        private BodyHandle body;
         private TypedIndex compoundShapeIndex;
         private Vector3 localCenterOfMassOffset;
 
@@ -34,6 +36,7 @@ namespace BepuWrapper.Entities.Behaviours
         public override void Initialize(EntityProperties properties, JsonObject attributes)
         {
             base.Initialize(properties, attributes);
+            config = attributes["selectors"].AsArray<string>();
 
             api = entity.Api;
             physics = api.ModLoader.GetModSystem<BepuWrapperModSystem>();
@@ -235,8 +238,6 @@ namespace BepuWrapper.Entities.Behaviours
             if (MathF.Abs(totalCorrection.Z) > axisEpsilon)
                 motion.Z = 0f;
 
-            //if (motion.LengthSquared() < 1e-9f) return;
-
             if (other is EntityPlayer)
             {
                 other.WatchedAttributes.SetDouble("rbodirX", motion.X);
@@ -403,16 +404,16 @@ namespace BepuWrapper.Entities.Behaviours
 
         private static float DegreesToRadians(float degrees) => degrees * (MathF.PI / 180f);
 
-        private static BuiltCompound BuildCompoundFromShape(Shape shape, Shapes shapes, BufferPool bufferPool)
+        private BuiltCompound BuildCompoundFromShape(Shape shape, Shapes shapes, BufferPool bufferPool)
         {
             var children = new List<CompoundChild>();
             var childMasses = new List<float>();
             var childLocalInertias = new List<Symmetric3x3>();
             var manualBoxes = new List<ManualChildBox>();
 
-            foreach (var root in shape.Elements)
+            foreach (var elementSelector in config)
             {
-                AppendElementRecursive(root, Matrix4x4.Identity, shapes, children, childMasses, childLocalInertias, manualBoxes);
+                shape.WalkElements(elementSelector, (element) => AppendElement(element, Matrix4x4.Identity, shapes, children, childMasses, childLocalInertias, manualBoxes));
             }
 
             if (children.Count == 0)
@@ -468,7 +469,7 @@ namespace BepuWrapper.Entities.Behaviours
             };
         }
 
-        private static Vector3 ComputeCenterOfMass(List<CompoundChild> children, List<float> childMasses)
+        private Vector3 ComputeCenterOfMass(List<CompoundChild> children, List<float> childMasses)
         {
             float totalMass = 0f;
             Vector3 weightedSum = Vector3.Zero;
@@ -486,7 +487,7 @@ namespace BepuWrapper.Entities.Behaviours
             return weightedSum / totalMass;
         }
 
-        private static BodyInertia ComputeCompoundInertia(
+        private BodyInertia ComputeCompoundInertia(
             List<CompoundChild> children,
             List<float> childMasses,
             List<Symmetric3x3> childLocalInertias,
@@ -528,7 +529,7 @@ namespace BepuWrapper.Entities.Behaviours
             };
         }
 
-        private static Symmetric3x3 RotateSymmetric3x3(Symmetric3x3 tensor, Quaternion rotation)
+        private Symmetric3x3 RotateSymmetric3x3(Symmetric3x3 tensor, Quaternion rotation)
         {
             Matrix4x4 r = Matrix4x4.CreateFromQuaternion(rotation);
 
@@ -565,7 +566,64 @@ namespace BepuWrapper.Entities.Behaviours
             return result;
         }
 
-        private static void AppendElementRecursive(
+        private static void AppendElement(
+            ShapeElement elem,
+            Matrix4x4 parentWorld,
+            Shapes shapes,
+            List<CompoundChild> children,
+            List<float> childMasses,
+            List<Symmetric3x3> childLocalInertias,
+            List<ManualChildBox> manualBoxes)
+        {
+            var local = CreateVsElementLocalMatrix(elem);
+            var world = local * parentWorld;
+
+            if (elem.From != null && elem.To != null)
+            {
+                float sx = ((float)elem.To[0] - (float)elem.From[0]) / 16f;
+                float sy = ((float)elem.To[1] - (float)elem.From[1]) / 16f;
+                float sz = ((float)elem.To[2] - (float)elem.From[2]) / 16f;
+
+                if (sx > 0f && sy > 0f && sz > 0f)
+                {
+                    var localCenter = new Vector3(sx * 0.5f, sy * 0.5f, sz * 0.5f);
+                    var childPosition = TransformPoint(world, localCenter);
+                    var childOrientation = ExtractRotation(world);
+                    var worldScale = ExtractScale(world);
+
+                    float width = MathF.Abs(sx * worldScale.X);
+                    float height = MathF.Abs(sy * worldScale.Y);
+                    float length = MathF.Abs(sz * worldScale.Z);
+
+                    var box = new Box(width, height, length);
+                    var shapeIndex = shapes.Add(box);
+
+                    children.Add(new CompoundChild()
+                    {
+                        LocalPose = new RigidPose(childPosition, childOrientation),
+                        ShapeIndex = shapeIndex
+                    });
+
+                    manualBoxes.Add(new ManualChildBox
+                    {
+                        LocalPosition = childPosition,
+                        LocalOrientation = childOrientation,
+                        HalfExtents = new Vector3(width * 0.5f, height * 0.5f, length * 0.5f)
+                    });
+
+                    float mass = width * height * length;
+                    childMasses.Add(mass);
+
+                    var childBodyInertia = box.ComputeInertia(mass);
+
+                    Symmetric3x3 childLocalInertia;
+                    Symmetric3x3.Invert(childBodyInertia.InverseInertiaTensor, out childLocalInertia);
+                    childLocalInertias.Add(childLocalInertia);
+                }
+            }
+        }
+
+        private void AppendElementRecursive(
             ShapeElement elem,
             Matrix4x4 parentWorld,
             Shapes shapes,
