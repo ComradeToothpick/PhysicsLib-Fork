@@ -3,6 +3,7 @@ using BepuPhysics.Collidables;
 using BepuUtilities;
 using BepuUtilities.Memory;
 using BepuWrapper.Api;
+using BepuWrapper.patches;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -621,6 +622,82 @@ namespace BepuWrapper.Entities.Behaviours
                     childLocalInertias.Add(childLocalInertia);
                 }
             }
+        }
+
+        public void AppendDynamicCollisionBoxes(
+            Cuboidd queryBox,
+            List<DynamicCollisionBox> results)
+        {
+            if (manualChildBoxes == null || manualChildBoxes.Count == 0)
+                return;
+
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+                return;
+
+            for (int i = 0; i < manualChildBoxes.Count; i++)
+            {
+                ManualChildBox child = manualChildBoxes[i];
+
+                Quaternion childWorldOrientation = Quaternion.Normalize(bodyOrientation * child.LocalOrientation);
+                Vector3 childWorldCenter = bodyPosition + Vector3.Transform(child.LocalPosition, bodyOrientation);
+
+                Cuboidd worldAabb = CreateAabbFromOrientedBox(
+                    childWorldCenter,
+                    childWorldOrientation,
+                    child.HalfExtents
+                );
+
+                if (!worldAabb.IntersectsOrTouches(queryBox))
+                    continue;
+
+                results.Add(new DynamicCollisionBox
+                {
+                    Box = worldAabb,
+                    SourceEntity = entity,
+                    CanSupport = true
+                });
+            }
+        }
+
+        private bool TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation)
+        {
+            bodyPosition = Vector3.Zero;
+            bodyOrientation = Quaternion.Identity;
+
+            if (physics?.bepu == null)
+                return false;
+
+            //if (physics.bepu.TryGetEntityBodyPose(entity, out bodyPosition, out bodyOrientation))
+            //    return true; TODO: [AD] Look at this
+
+            bodyPosition = ToBepu(entity.Pos.X, entity.Pos.Y, entity.Pos.Z) + localCenterOfMassOffset;
+            bodyOrientation = Quaternion.Identity;
+            return true;
+        }
+
+        private static Cuboidd CreateAabbFromOrientedBox(
+            Vector3 center,
+            Quaternion orientation,
+            Vector3 halfExtents)
+        {
+            Vector3 right = Vector3.Transform(Vector3.UnitX, orientation);
+            Vector3 up = Vector3.Transform(Vector3.UnitY, orientation);
+            Vector3 forward = Vector3.Transform(Vector3.UnitZ, orientation);
+
+            Vector3 extents = new Vector3(
+                MathF.Abs(right.X) * halfExtents.X + MathF.Abs(up.X) * halfExtents.Y + MathF.Abs(forward.X) * halfExtents.Z,
+                MathF.Abs(right.Y) * halfExtents.X + MathF.Abs(up.Y) * halfExtents.Y + MathF.Abs(forward.Y) * halfExtents.Z,
+                MathF.Abs(right.Z) * halfExtents.X + MathF.Abs(up.Z) * halfExtents.Y + MathF.Abs(forward.Z) * halfExtents.Z
+            );
+
+            return new Cuboidd(
+                center.X - extents.X,
+                center.Y - extents.Y,
+                center.Z - extents.Z,
+                center.X + extents.X,
+                center.Y + extents.Y,
+                center.Z + extents.Z
+            );
         }
     }
 }
