@@ -1,9 +1,5 @@
-﻿using BepuPhysics;
-using BepuPhysics.Collidables;
-using BepuPhysics.CollisionDetection;
-using BepuUtilities;
-using BepuUtilities.Memory;
-using BepuWrapper.Entities.Behaviours;
+﻿using BepuWrapper.Entities.Behaviours;
+using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
@@ -19,13 +15,15 @@ namespace BepuWrapper
         // Useful for registering block/entity classes on both sides
         public override void Start(ICoreAPI api)
         {
+            var harmony = new Harmony(Mod.Info.ModID);
+            harmony.PatchAll();
+            bepu = new BepuWorld(api);
             Mod.Logger.Notification("Hello from template mod: " + api.Side);
             api.RegisterEntityBehaviorClass("bepu-physics", typeof(BepuPhysicsBehaviour));
         }
 
         public override void StartServerSide(ICoreServerAPI api)
         {
-            bepu = new BepuWorld(api);
             Mod.Logger.Notification("Hello from template mod server side: " + Lang.Get("bepuwrapper:hello"));
         }
 

@@ -3,12 +3,32 @@
     "file": "game:entities/nonliving/boat-sailed",
     "op": "addmerge",
     "path": "/server/behaviors",
-    "value": [ { "code": "bepu-physics" } ]
+    "value": [
+      {
+        "code": "bepu-physics",
+        "selectors": [
+          "ORIGIN/ORIGIN-Section1/*",
+          "ORIGIN/ORIGIN-Section2/*",
+          "ORIGIN/ORIGIN-Prow/*",
+          "ORIGIN/ORIGIN-Prow2/*"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "game:entities/nonliving/boat-sailed",
+    "op": "addmerge",
+    "path": "/client/behaviors",
+    "value": [
+      {
+        "code": "bepu-physics",
+        "selectors": [
+          "ORIGIN/ORIGIN-Section1/*",
+          "ORIGIN/ORIGIN-Section2/*",
+          "ORIGIN/ORIGIN-Prow/*",
+          "ORIGIN/ORIGIN-Prow2/*"
+        ]
+      }
+    ]
   }
-  //{
-  //  "file": "game:entities/nonliving/boat-sailed",
-  //  "op": "add",
-  //  "path": "/client/behaviors",
-  //  "value": [ { "code": "bepu-physics" } ]
-  //}
 ]
