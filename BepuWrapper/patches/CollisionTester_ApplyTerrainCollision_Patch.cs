@@ -4,6 +4,7 @@ using BepuWrapper.Entities.Behaviours;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
@@ -22,7 +23,7 @@ namespace BepuWrapper.patches
         }
 
         private static readonly Dictionary<long, SupportState> SupportStates = new();
-        private const int SupportGraceTicks = 8;
+        private const int SupportGraceTicks = 20;
 
         public static bool TryGetStandingOnEntity(Entity entity, out Entity standingOnEntity)
         {
@@ -42,6 +43,44 @@ namespace BepuWrapper.patches
 
             standingOnEntity = state.SupportEntity;
             return true;
+        }
+
+        private static bool TryGetSupportTopY(
+            Entity supportEntity,
+            List<DynamicCollisionBox> dynamicBoxes,
+            Cuboidd entityBox,
+            out double supportTopY)
+        {
+            supportTopY = 0.0;
+            bool found = false;
+
+            for (int i = 0; i < dynamicBoxes.Count; i++)
+            {
+                DynamicCollisionBox box = dynamicBoxes[i];
+                if (box.SourceEntity != supportEntity || !box.CanSupport)
+                    continue;
+
+                Cuboidd b = box.Box;
+                if (b == null)
+                    continue;
+
+                bool overlapsHorizontally =
+                    entityBox.X2 > b.X1 &&
+                    entityBox.X1 < b.X2 &&
+                    entityBox.Z2 > b.Z1 &&
+                    entityBox.Z1 < b.Z2;
+
+                if (!overlapsHorizontally)
+                    continue;
+
+                if (!found || b.Y2 > supportTopY)
+                {
+                    supportTopY = b.Y2;
+                    found = true;
+                }
+            }
+
+            return found;
         }
 
         public static void ClearStandingOnEntity(Entity entity)
@@ -88,10 +127,18 @@ namespace BepuWrapper.patches
             }
         }
 
-        private static bool IsEntityStillContainedBySupport(Entity entity, Entity supportEntity, List<DynamicCollisionBox> dynamicBoxes, Cuboidd entityBox)
+        private static bool IsEntityStillContainedBySupport(
+            Entity entity,
+            Entity supportEntity,
+            List<DynamicCollisionBox> dynamicBoxes,
+            Cuboidd entityBox)
         {
             if (entity == null || supportEntity == null || dynamicBoxes == null || dynamicBoxes.Count == 0)
                 return false;
+
+            const double horizontalTolerance = 0.1;
+            const double verticalToleranceAbove = 0.35;
+            const double verticalToleranceBelow = 0.25;
 
             for (int i = 0; i < dynamicBoxes.Count; i++)
             {
@@ -99,10 +146,31 @@ namespace BepuWrapper.patches
                 if (box.SourceEntity != supportEntity)
                     continue;
 
-                if (box.Box == null)
+                Cuboidd b = box.Box;
+                if (b == null)
                     continue;
 
-                if (box.Box.IntersectsOrTouches(entityBox))
+                bool overlapsHorizontally =
+                    entityBox.X2 > b.X1 - horizontalTolerance &&
+                    entityBox.X1 < b.X2 + horizontalTolerance &&
+                    entityBox.Z2 > b.Z1 - horizontalTolerance &&
+                    entityBox.Z1 < b.Z2 + horizontalTolerance;
+
+                if (!overlapsHorizontally)
+                    continue;
+
+                bool overlapsVertically =
+                    entityBox.Y2 > b.Y1 - verticalToleranceBelow &&
+                    entityBox.Y1 < b.Y2 + verticalToleranceAbove;
+
+                if (overlapsVertically)
+                    return true;
+
+                double feetY = entityBox.Y1;
+                double topY = b.Y2;
+                double verticalOffset = feetY - topY;
+
+                if (verticalOffset >= -verticalToleranceBelow && verticalOffset <= verticalToleranceAbove)
                     return true;
             }
 
@@ -171,15 +239,28 @@ namespace BepuWrapper.patches
                 {
                     Vec3d carryPoint = GetCarryPoint(entityBox);
                     Vec3d carryDelta;
+
                     if (supportPhysics.TryGetCarryDeltaForPoint(carryPoint, out carryDelta))
                     {
-                        const float carryDeltaScale = 0.8f;
-
-                        pos.X += carryDelta.X * carryDeltaScale;
-                        pos.Y += carryDelta.Y * carryDeltaScale;
-                        pos.Z += carryDelta.Z * carryDeltaScale;
+                        pos.X += carryDelta.X;
+                        pos.Y += carryDelta.Y;
+                        pos.Z += carryDelta.Z;
 
                         entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
+                    }
+
+                    if (supportPhysics.TryGetCarryRotationDelta(out Quaternion rotationDelta))
+                    {
+                        Vector3 horizontalMotion = new Vector3(
+                            (float)entityPos.Motion.X,
+                            0f,
+                            (float)entityPos.Motion.Z
+                        );
+
+                        horizontalMotion = Vector3.Transform(horizontalMotion, rotationDelta);
+
+                        entityPos.Motion.X = horizontalMotion.X;
+                        entityPos.Motion.Z = horizontalMotion.Z;
                     }
                 }
             }
@@ -215,6 +296,15 @@ namespace BepuWrapper.patches
                 entityPos.Dimension
             );
 
+            float dynamicQueryStepHeight = stepHeight;
+            float dynamicQueryYExtra = yExtra;
+
+            if (TryGetStandingOnEntity(entity, out Entity querySupportEntity) && querySupportEntity != null)
+            {
+                dynamicQueryStepHeight = Math.Max(dynamicQueryStepHeight, 2f);
+                dynamicQueryYExtra = Math.Max(dynamicQueryYExtra, 2f);
+            }
+
             List<DynamicCollisionBox> dynamicBoxes = CollectDynamicCollisionBoxes(
                 entity,
                 entityPos.Dimension,
@@ -222,9 +312,33 @@ namespace BepuWrapper.patches
                 motionX,
                 motionY,
                 motionZ,
-                stepHeight,
-                yExtra
+                dynamicQueryStepHeight,
+                dynamicQueryYExtra
             );
+
+            if (TryGetStandingOnEntity(entity, out Entity snapSupportEntity) && snapSupportEntity != null)
+            {
+                if (TryGetSupportTopY(snapSupportEntity, dynamicBoxes, entityBox, out double supportTopY))
+                {
+                    double feetY = entityBox.Y1;
+                    double snapToleranceAbove = 0.25;
+                    double snapToleranceBelow = 0.1;
+
+                    double verticalOffset = feetY - supportTopY;
+
+                    if (verticalOffset >= -snapToleranceBelow && verticalOffset <= snapToleranceAbove)
+                    {
+                        double snapDelta = supportTopY - feetY;
+                        pos.Y += snapDelta;
+                        entityBox.Translate(0.0, snapDelta, 0.0);
+
+                        if (entityPos.Motion.Y < 0.0)
+                        {
+                            entityPos.Motion.Y = 0.0;
+                        }
+                    }
+                }
+            }
 
             bool collidedVertically = false;
             bool standingOnDynamicEntity = false;
@@ -268,6 +382,7 @@ namespace BepuWrapper.patches
                     {
                         standingOnDynamicEntity = true;
                         supportEntity = dynamicBoxes[i].SourceEntity;
+                        entity.OnGround = true;
                     }
                 }
             }
@@ -389,12 +504,16 @@ namespace BepuWrapper.patches
                 previousSupportEntity != null &&
                 IsEntityStillContainedBySupport(entity, previousSupportEntity, dynamicBoxes, entityBox);
 
+            Entity resolvedSupportEntity = null;
+
             if (standingOnDynamicEntity && supportEntity != null)
             {
+                resolvedSupportEntity = supportEntity;
                 SetStandingOnEntity(entity, supportEntity);
             }
             else if (keepPreviousSupport)
             {
+                resolvedSupportEntity = previousSupportEntity;
                 SetStandingOnEntity(entity, previousSupportEntity);
             }
             else
@@ -402,11 +521,50 @@ namespace BepuWrapper.patches
                 DecayStandingOnEntity(entity);
             }
 
-            newPosition.Set(
-                pos.X + motionX,
-                pos.Y + motionY,
-                pos.Z + motionZ
-            );
+            double finalX = pos.X + motionX;
+            double finalY = pos.Y + motionY;
+            double finalZ = pos.Z + motionZ;
+
+            if (resolvedSupportEntity != null)
+            {
+                Cuboidd finalEntityBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
+
+                float finalQueryStepHeight = Math.Max(stepHeight, 2f);
+                float finalQueryYExtra = Math.Max(yExtra, 2f);
+
+                List<DynamicCollisionBox> finalDynamicBoxes = CollectDynamicCollisionBoxes(
+                    entity,
+                    entityPos.Dimension,
+                    finalEntityBox,
+                    0.0,
+                    0.0,
+                    0.0,
+                    finalQueryStepHeight,
+                    finalQueryYExtra
+                );
+
+                if (TryGetSupportTopY(resolvedSupportEntity, finalDynamicBoxes, finalEntityBox, out double supportTopY))
+                {
+                    double feetY = finalEntityBox.Y1;
+                    double clampDelta = supportTopY - feetY;
+
+                    finalY += clampDelta;
+
+                    if (entityPos.Motion.Y < 0.0)
+                    {
+                        entityPos.Motion.Y = 0.0;
+                    }
+
+                    if (motionY < 0.0)
+                    {
+                        motionY = 0.0;
+                    }
+
+                    entity.CollidedVertically = true;
+                }
+            }
+
+            newPosition.Set(finalX, finalY, finalZ);
         }
 
         private static void GenerateTerrainCollisionBoxList(

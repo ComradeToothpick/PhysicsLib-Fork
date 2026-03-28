@@ -22,7 +22,6 @@ namespace BepuWrapper.Entities.Behaviours
         private BepuWrapperModSystem physics;
         private string[] selectors;
 
-        private BodyHandle body;
         private TypedIndex compoundShapeIndex;
         private Vector3 localCenterOfMassOffset;
 
@@ -47,7 +46,7 @@ namespace BepuWrapper.Entities.Behaviours
             if (entity.Api.Side == EnumAppSide.Client)
             {
                 capi = entity.Api as ICoreClientAPI;
-                capi.Event.RegisterRenderer(new DebugRenderer(this), EnumRenderStage.AfterFinalComposition);
+                //capi.Event.RegisterRenderer(new DebugRenderer(this), EnumRenderStage.AfterFinalComposition);
             }
 
             selectors = attributes["selectors"].AsArray<string>();
@@ -434,15 +433,15 @@ namespace BepuWrapper.Entities.Behaviours
         }
 
         private void AppendSelectedElementsRecursive(
-    ShapeElement elem,
-    Matrix4x4 parentWorld,
-    string path,
-    bool parentSelected,
-    Shapes shapes,
-    List<CompoundChild> children,
-    List<float> childMasses,
-    List<Symmetric3x3> childLocalInertias,
-    List<ManualChildBox> manualBoxes)
+            ShapeElement elem,
+            Matrix4x4 parentWorld,
+            string path,
+            bool parentSelected,
+            Shapes shapes,
+            List<CompoundChild> children,
+            List<float> childMasses,
+            List<Symmetric3x3> childLocalInertias,
+            List<ManualChildBox> manualBoxes)
         {
             bool selected = parentSelected || MatchesAnySelector(path);
 
@@ -524,7 +523,7 @@ namespace BepuWrapper.Entities.Behaviours
         private bool MatchesAnySelector(string path)
         {
             if (selectors == null || selectors.Length == 0)
-                return false;
+                return true;
 
             for (int i = 0; i < selectors.Length; i++)
             {
@@ -809,6 +808,20 @@ namespace BepuWrapper.Entities.Behaviours
             bodyPosition =
                 entityOrigin +
                 Vector3.Transform(localAnchorCorrection + localCenterOfMassOffset, bodyOrientation);
+
+            return true;
+        }
+
+        public bool TryGetCarryRotationDelta(out Quaternion rotationDelta)
+        {
+            rotationDelta = Quaternion.Identity;
+
+            if (!hasPreviousCarryPose)
+                return false;
+
+            rotationDelta = Quaternion.Normalize(
+                currentCarryRotation * Quaternion.Inverse(previousCarryRotation)
+            );
 
             return true;
         }
