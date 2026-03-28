@@ -20,7 +20,7 @@ namespace BepuWrapper.Entities.Behaviours
     {
         private ICoreAPI api;
         private BepuWrapperModSystem physics;
-        private string[] config;
+        private string[] selectors;
 
         private BodyHandle body;
         private TypedIndex compoundShapeIndex;
@@ -46,7 +46,7 @@ namespace BepuWrapper.Entities.Behaviours
                 capi.Event.RegisterRenderer(new DebugRenderer(this), EnumRenderStage.AfterFinalComposition);
             }
 
-            config = attributes["selectors"].AsArray<string>();
+            selectors = attributes["selectors"].AsArray<string>();
 
             api = entity.Api;
             physics = api.ModLoader.GetModSystem<BepuWrapperModSystem>();
@@ -469,12 +469,12 @@ namespace BepuWrapper.Entities.Behaviours
 
         private bool MatchesAnySelector(string path)
         {
-            if (config == null || config.Length == 0)
+            if (selectors == null || selectors.Length == 0)
                 return false;
 
-            for (int i = 0; i < config.Length; i++)
+            for (int i = 0; i < selectors.Length; i++)
             {
-                string selector = config[i];
+                string selector = selectors[i];
                 if (string.IsNullOrWhiteSpace(selector))
                     continue;
 
@@ -746,10 +746,15 @@ namespace BepuWrapper.Entities.Behaviours
 
             Quaternion correction = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2f);
 
-            bodyOrientation = Quaternion.Normalize(entityRotation * correction);
+            bodyOrientation = Quaternion.Normalize(correction * entityRotation);
 
             Vector3 entityOrigin = ToBepu(pos.X, pos.Y, pos.Z);
-            bodyPosition = entityOrigin + Vector3.Transform(localCenterOfMassOffset, bodyOrientation);
+
+            Vector3 localAnchorCorrection = new Vector3(-0.5f, 0f, -0.5f);
+
+            bodyPosition =
+                entityOrigin +
+                Vector3.Transform(localAnchorCorrection + localCenterOfMassOffset, bodyOrientation);
 
             return true;
         }
