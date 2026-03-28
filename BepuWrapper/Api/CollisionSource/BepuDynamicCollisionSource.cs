@@ -2,6 +2,7 @@
 using BepuWrapper.patches;
 using System;
 using System.Collections.Generic;
+using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
@@ -9,9 +10,12 @@ namespace BepuWrapper.Api.CollisionSource
 {
     public class BepuDynamicCollisionSource : IBepuDynamicCollisionSource
     {
+        private ICoreAPI api;
+
+        public BepuDynamicCollisionSource(ICoreAPI api) { this.api = api; }
+
         public void CollectCollisionBoxes(
             Entity movingEntity,
-            int dimension,
             Cuboidd queryBox,
             List<DynamicCollisionBox> results)
         {
@@ -21,13 +25,22 @@ namespace BepuWrapper.Api.CollisionSource
 
             double rangeX = Math.Max(1.0, (queryBox.X2 - queryBox.X1) * 0.5 + 2.0);
             double rangeY = Math.Max(1.0, (queryBox.Y2 - queryBox.Y1) * 0.5 + 2.0);
-
-            Entity[] nearby = movingEntity.World.GetEntitiesAround(
-                new Vec3d(centerX, centerY, centerZ),
-                (float)rangeX,
-                (float)rangeY,
-                e => e != null && e.EntityId != movingEntity.EntityId
-            );
+            Entity[] nearby;
+            if (movingEntity != null)
+                nearby = movingEntity.World.GetEntitiesAround(
+                    new Vec3d(centerX, centerY, centerZ),
+                    (float)rangeX,
+                    (float)rangeY,
+                    e => e != null && e.EntityId != movingEntity.EntityId
+                );
+            else 
+                 nearby = api.World.GetEntitiesAround(
+                    new Vec3d(centerX, centerY, centerZ),
+                    (float)rangeX,
+                    (float)rangeY,
+                    e => e != null
+                );
+            
 
             if (nearby == null || nearby.Length == 0)
                 return;
@@ -35,7 +48,7 @@ namespace BepuWrapper.Api.CollisionSource
             for (int i = 0; i < nearby.Length; i++)
             {
                 Entity candidate = nearby[i];
-                if (candidate == null || candidate.EntityId == movingEntity.EntityId)
+                if (candidate == null || (movingEntity != null && candidate.EntityId == movingEntity.EntityId))
                     continue;
 
                 BepuPhysicsBehaviour bepuBehavior = candidate.GetBehavior<BepuPhysicsBehaviour>();

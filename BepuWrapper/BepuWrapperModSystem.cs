@@ -21,7 +21,9 @@ namespace BepuWrapper
             harmony = new Harmony(Mod.Info.ModID);
             harmony.PatchAll();
             bepu = new BepuWorld(api);
-            CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = new BepuDynamicCollisionSource();
+            var dynamicSource = new BepuDynamicCollisionSource(api);
+            CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = dynamicSource;
+            CollisionTester_IsColliding_Patch.DynamicCollisionSource = dynamicSource;
             Mod.Logger.Notification("Hello from template mod: " + api.Side);
             api.RegisterEntityBehaviorClass("bepu-physics", typeof(BepuPhysicsBehaviour));
         }
@@ -39,6 +41,7 @@ namespace BepuWrapper
         public override void Dispose()
         {
             CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = null;
+            CollisionTester_IsColliding_Patch.DynamicCollisionSource = null;
 
             if (harmony != null)
             {

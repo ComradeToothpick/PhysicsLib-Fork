@@ -6,6 +6,6 @@ namespace BepuWrapper.Api.CollisionSource
 {
     public interface IBepuDynamicCollisionSource
     {
-        void CollectCollisionBoxes(Entity movingEntity, int dimension, Cuboidd queryBox, List<DynamicCollisionBox> results);
+        void CollectCollisionBoxes(Entity movingEntity, Cuboidd queryBox, List<DynamicCollisionBox> results);
     }
 }

@@ -332,7 +332,6 @@ namespace BepuWrapper.patches
 
             DynamicCollisionSource.CollectCollisionBoxes(
                 movingEntity,
-                dimension,
                 queryBox,
                 results
             );
