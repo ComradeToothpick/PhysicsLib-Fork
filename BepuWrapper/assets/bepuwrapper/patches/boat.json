@@ -1,6 +1,16 @@
 [
   {
     "file": "game:entities/nonliving/boat-sailed",
+    "op": "remove",
+    "path": "/server/behaviors/0"
+  },
+  {
+    "file": "game:entities/nonliving/boat-sailed",
+    "op": "remove",
+    "path": "/client/behaviors/0"
+  },
+  {
+    "file": "game:entities/nonliving/boat-sailed",
     "op": "addmerge",
     "path": "/server/behaviors",
     "value": [

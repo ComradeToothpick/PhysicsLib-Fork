@@ -1,5 +1,6 @@
 ﻿using BepuWrapper.Api;
 using BepuWrapper.Api.CollisionSource;
+using BepuWrapper.Entities.Behaviours;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
@@ -13,6 +14,109 @@ namespace BepuWrapper.patches
     public static class CollisionTester_ApplyTerrainCollision_Patch
     {
         public static IBepuDynamicCollisionSource DynamicCollisionSource;
+
+        private class SupportState
+        {
+            public Entity SupportEntity;
+            public int GraceTicks;
+        }
+
+        private static readonly Dictionary<long, SupportState> SupportStates = new();
+        private const int SupportGraceTicks = 8;
+
+        public static bool TryGetStandingOnEntity(Entity entity, out Entity standingOnEntity)
+        {
+            standingOnEntity = null;
+
+            if (entity == null)
+                return false;
+
+            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState state) || state == null)
+                return false;
+
+            if (state.SupportEntity == null)
+            {
+                SupportStates.Remove(entity.EntityId);
+                return false;
+            }
+
+            standingOnEntity = state.SupportEntity;
+            return true;
+        }
+
+        public static void ClearStandingOnEntity(Entity entity)
+        {
+            if (entity == null)
+                return;
+
+            SupportStates.Remove(entity.EntityId);
+        }
+
+        private static void SetStandingOnEntity(Entity entity, Entity standingOnEntity)
+        {
+            if (entity == null)
+                return;
+
+            if (standingOnEntity == null)
+            {
+                SupportStates.Remove(entity.EntityId);
+                return;
+            }
+
+            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState state) || state == null)
+            {
+                state = new SupportState();
+                SupportStates[entity.EntityId] = state;
+            }
+
+            state.SupportEntity = standingOnEntity;
+            state.GraceTicks = SupportGraceTicks;
+        }
+
+        private static void DecayStandingOnEntity(Entity entity)
+        {
+            if (entity == null)
+                return;
+
+            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState state) || state == null)
+                return;
+
+            state.GraceTicks--;
+            if (state.GraceTicks <= 0 || state.SupportEntity == null)
+            {
+                SupportStates.Remove(entity.EntityId);
+            }
+        }
+
+        private static bool IsEntityStillContainedBySupport(Entity entity, Entity supportEntity, List<DynamicCollisionBox> dynamicBoxes, Cuboidd entityBox)
+        {
+            if (entity == null || supportEntity == null || dynamicBoxes == null || dynamicBoxes.Count == 0)
+                return false;
+
+            for (int i = 0; i < dynamicBoxes.Count; i++)
+            {
+                DynamicCollisionBox box = dynamicBoxes[i];
+                if (box.SourceEntity != supportEntity)
+                    continue;
+
+                if (box.Box == null)
+                    continue;
+
+                if (box.Box.IntersectsOrTouches(entityBox))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static Vec3d GetCarryPoint(Cuboidd entityBox)
+        {
+            return new Vec3d(
+                (entityBox.X1 + entityBox.X2) * 0.5,
+                entityBox.Y1,
+                (entityBox.Z1 + entityBox.Z2) * 0.5
+            );
+        }
 
         [HarmonyPrefix]
         public static bool Prefix(
@@ -57,7 +161,28 @@ namespace BepuWrapper.patches
             pos.Z = entityPos.Z;
 
             EnumPushDirection direction = EnumPushDirection.None;
+
             entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
+
+            if (TryGetStandingOnEntity(entity, out Entity previousSupportEntity) && previousSupportEntity != null)
+            {
+                BepuPhysicsBehaviour supportPhysics = previousSupportEntity.GetBehavior<BepuPhysicsBehaviour>();
+                if (supportPhysics != null)
+                {
+                    Vec3d carryPoint = GetCarryPoint(entityBox);
+                    Vec3d carryDelta;
+                    if (supportPhysics.TryGetCarryDeltaForPoint(carryPoint, out carryDelta))
+                    {
+                        const float carryDeltaScale = 0.8f;
+
+                        pos.X += carryDelta.X * carryDeltaScale;
+                        pos.Y += carryDelta.Y * carryDeltaScale;
+                        pos.Z += carryDelta.Z * carryDeltaScale;
+
+                        entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
+                    }
+                }
+            }
 
             double motionX = entityPos.Motion.X * dtFactor;
             double motionY = entityPos.Motion.Y * dtFactor;
@@ -102,6 +227,9 @@ namespace BepuWrapper.patches
             );
 
             bool collidedVertically = false;
+            bool standingOnDynamicEntity = false;
+            Entity supportEntity = null;
+
             int terrainCount = tester.CollisionBoxList.Count;
             Cuboidd[] terrainBoxes = tester.CollisionBoxList.cuboids;
             BlockPos collBlockPos = new BlockPos(entityPos.Dimension);
@@ -135,6 +263,12 @@ namespace BepuWrapper.patches
                 {
                     motionY = pushedY;
                     collidedVertically = true;
+
+                    if (dynamicDirection == EnumPushDirection.Negative && dynamicBoxes[i].CanSupport)
+                    {
+                        standingOnDynamicEntity = true;
+                        supportEntity = dynamicBoxes[i].SourceEntity;
+                    }
                 }
             }
 
@@ -249,6 +383,24 @@ namespace BepuWrapper.patches
             motionX -= motionBiasX;
             motionY -= motionBiasY;
             motionZ -= motionBiasZ;
+
+            bool keepPreviousSupport =
+                !standingOnDynamicEntity &&
+                previousSupportEntity != null &&
+                IsEntityStillContainedBySupport(entity, previousSupportEntity, dynamicBoxes, entityBox);
+
+            if (standingOnDynamicEntity && supportEntity != null)
+            {
+                SetStandingOnEntity(entity, supportEntity);
+            }
+            else if (keepPreviousSupport)
+            {
+                SetStandingOnEntity(entity, previousSupportEntity);
+            }
+            else
+            {
+                DecayStandingOnEntity(entity);
+            }
 
             newPosition.Set(
                 pos.X + motionX,

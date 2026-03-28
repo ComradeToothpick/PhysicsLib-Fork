@@ -29,8 +29,12 @@ namespace BepuWrapper.Entities.Behaviours
         private readonly List<ManualChildBox> manualChildBoxes = new();
         private float compoundBroadphaseRadius;
 
-        private Vector3 lastBodyOrigin;
-        private bool hadLastBodyOrigin;
+        private Vector3 previousCarryPosition;
+        private Quaternion previousCarryRotation = Quaternion.Identity;
+        private Vector3 currentCarryPosition;
+        private Quaternion currentCarryRotation = Quaternion.Identity;
+        private bool hasPreviousCarryPose;
+        public Vec3f velocity = new Vec3f();
 
         public BepuPhysicsBehaviour(Entity entity) : base(entity)
         {
@@ -97,19 +101,69 @@ namespace BepuWrapper.Entities.Behaviours
             );
 
             physics.bepu.RegisterEntityBody(entity, bodyDescription, localCenterOfMassOffset);
-
-            lastBodyOrigin = bodyPose.Position;
-            hadLastBodyOrigin = true;
         }
 
         public override void OnGameTick(float deltaTime)
         {
             base.OnGameTick(deltaTime);
 
-            if (api == null || !entity.Alive || manualChildBoxes.Count == 0)
+            if (api == null || !entity.Alive)
                 return;
 
-            //PushNearbyEntitiesOutOfCompound();
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+                return;
+
+            if (!hasPreviousCarryPose)
+            {
+                previousCarryPosition = bodyPosition;
+                previousCarryRotation = bodyOrientation;
+                currentCarryPosition = bodyPosition;
+                currentCarryRotation = bodyOrientation;
+                hasPreviousCarryPose = true;
+                velocity.Set(0, 0, 0);
+                return;
+            }
+
+            previousCarryPosition = currentCarryPosition;
+            previousCarryRotation = currentCarryRotation;
+
+            currentCarryPosition = bodyPosition;
+            currentCarryRotation = bodyOrientation;
+
+            Vector3 frameDelta = currentCarryPosition - previousCarryPosition;
+
+            if (deltaTime > 1e-6f)
+            {
+                velocity.Set(
+                    frameDelta.X / deltaTime,
+                    frameDelta.Y / deltaTime,
+                    frameDelta.Z / deltaTime
+                );
+            }
+            else
+            {
+                velocity.Set(0, 0, 0);
+            }
+        }
+
+        public bool TryGetCarryDeltaForPoint(Vec3d worldPoint, out Vec3d carryDelta)
+        {
+            carryDelta = new Vec3d();
+
+            if (!hasPreviousCarryPose)
+                return false;
+
+            Vector3 point = new Vector3((float)worldPoint.X, (float)worldPoint.Y, (float)worldPoint.Z);
+
+            Quaternion invPreviousRotation = Quaternion.Inverse(previousCarryRotation);
+
+            Vector3 localPoint = Vector3.Transform(point - previousCarryPosition, invPreviousRotation);
+            Vector3 transformedPoint = currentCarryPosition + Vector3.Transform(localPoint, currentCarryRotation);
+
+            Vector3 delta = transformedPoint - point;
+
+            carryDelta.Set(delta.X, delta.Y, delta.Z);
+            return true;
         }
 
         public void DebugRender(ICoreClientAPI capi)
