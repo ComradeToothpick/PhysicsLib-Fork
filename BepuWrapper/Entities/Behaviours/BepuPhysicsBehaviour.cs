@@ -228,23 +228,19 @@ namespace BepuWrapper.Entities.Behaviours
             float fy = elem.From != null ? (float)elem.From[1] / 16f : 0f;
             float fz = elem.From != null ? (float)elem.From[2] / 16f : 0f;
 
-            var translation = Matrix4x4.CreateTranslation(fx, fy, fz);
-            var toOrigin = Matrix4x4.CreateTranslation(-ox, -oy, -oz);
-            var fromOrigin = Matrix4x4.CreateTranslation(ox, oy, oz);
+            Matrix4x4 toOrigin = Matrix4x4.CreateTranslation(-ox, -oy, -oz);
+            Matrix4x4 fromOrigin = Matrix4x4.CreateTranslation(ox, oy, oz);
 
-            var rotation = Matrix4x4.CreateFromYawPitchRoll(
+            Matrix4x4 rotation = Matrix4x4.CreateFromYawPitchRoll(
                 DegreesToRadians((float)elem.RotationY),
                 DegreesToRadians((float)elem.RotationX),
                 DegreesToRadians((float)elem.RotationZ)
             );
 
-            var scale = Matrix4x4.CreateScale(
-                (float)elem.ScaleX,
-                (float)elem.ScaleY,
-                (float)elem.ScaleZ
-            );
+            Matrix4x4 scale = Matrix4x4.CreateScale((float)elem.ScaleX, (float)elem.ScaleY, (float)elem.ScaleZ);
+            Matrix4x4 translation = Matrix4x4.CreateTranslation(fx, fy, fz);
 
-            return translation * fromOrigin * rotation * scale * toOrigin;
+            return toOrigin * scale * rotation * fromOrigin * translation;
         }
 
         private BuiltCompound BuildCompoundFromShape(Shape shape, Shapes shapes, BufferPool bufferPool)
@@ -254,20 +250,22 @@ namespace BepuWrapper.Entities.Behaviours
             var childLocalInertias = new List<Symmetric3x3>();
             var manualBoxes = new List<ManualChildBox>();
 
-            foreach (var elementSelector in config)
+            if (shape.Elements == null || shape.Elements.Length == 0)
+                throw new InvalidOperationException("Shape has no root elements.");
+
+            for (int i = 0; i < shape.Elements.Length; i++)
             {
-                shape.WalkElements(elementSelector, element =>
-                {
-                    AppendElement(
-                        element,
-                        Matrix4x4.Identity,
-                        shapes,
-                        children,
-                        childMasses,
-                        childLocalInertias,
-                        manualBoxes
-                    );
-                });
+                AppendSelectedElementsRecursive(
+                    shape.Elements[i],
+                    Matrix4x4.Identity,
+                    shape.Elements[i].Name ?? string.Empty,
+                    false,
+                    shapes,
+                    children,
+                    childMasses,
+                    childLocalInertias,
+                    manualBoxes
+                );
             }
 
             if (children.Count == 0)
@@ -278,7 +276,7 @@ namespace BepuWrapper.Entities.Behaviours
 
             for (int i = 0; i < children.Count; i++)
             {
-                var child = children[i];
+                CompoundChild child = children[i];
                 child.LocalPose.Position -= centerOfMass;
                 children[i] = child;
             }
@@ -286,7 +284,7 @@ namespace BepuWrapper.Entities.Behaviours
             float broadphaseRadius = 0f;
             for (int i = 0; i < manualBoxes.Count; i++)
             {
-                var box = manualBoxes[i];
+                ManualChildBox box = manualBoxes[i];
                 box.LocalPosition -= centerOfMass;
                 manualBoxes[i] = box;
 
@@ -301,7 +299,7 @@ namespace BepuWrapper.Entities.Behaviours
                 childBuffer[i] = children[i];
             }
 
-            var compound = new Compound(childBuffer);
+            Compound compound = new Compound(childBuffer);
 
             return new BuiltCompound
             {
@@ -313,19 +311,23 @@ namespace BepuWrapper.Entities.Behaviours
             };
         }
 
-        private void AppendElement(
+        private void AppendSelectedElementsRecursive(
             ShapeElement elem,
             Matrix4x4 parentWorld,
+            string path,
+            bool parentSelected,
             Shapes shapes,
             List<CompoundChild> children,
             List<float> childMasses,
             List<Symmetric3x3> childLocalInertias,
             List<ManualChildBox> manualBoxes)
         {
-            var local = CreateVsElementLocalMatrix(elem);
-            var world = local * parentWorld;
+            bool selected = parentSelected || MatchesAnySelector(path);
 
-            if (elem.From != null && elem.To != null)
+            Matrix4x4 local = CreateVsElementLocalMatrix(elem);
+            Matrix4x4 world = local * parentWorld;
+
+            if (selected && elem.From != null && elem.To != null)
             {
                 float sx = ((float)elem.To[0] - (float)elem.From[0]) / 16f;
                 float sy = ((float)elem.To[1] - (float)elem.From[1]) / 16f;
@@ -333,17 +335,17 @@ namespace BepuWrapper.Entities.Behaviours
 
                 if (sx > 0f && sy > 0f && sz > 0f)
                 {
-                    var localCenter = new Vector3(sx * 0.5f, sy * 0.5f, sz * 0.5f);
-                    var childPosition = TransformPoint(world, localCenter);
-                    var childOrientation = ExtractRotation(world);
-                    var worldScale = ExtractScale(world);
+                    Vector3 localCenter = new Vector3(sx * 0.5f, sy * 0.5f, sz * 0.5f);
+                    Vector3 childPosition = TransformPoint(world, localCenter);
+                    Quaternion childOrientation = ExtractRotation(world);
+                    Vector3 worldScale = ExtractScale(world);
 
                     float width = MathF.Abs(sx * worldScale.X);
                     float height = MathF.Abs(sy * worldScale.Y);
                     float length = MathF.Abs(sz * worldScale.Z);
 
-                    var box = new Box(width, height, length);
-                    var shapeIndex = shapes.Add(box);
+                    Box box = new Box(width, height, length);
+                    TypedIndex shapeIndex = shapes.Add(box);
 
                     children.Add(new CompoundChild
                     {
@@ -361,14 +363,93 @@ namespace BepuWrapper.Entities.Behaviours
                     float mass = width * height * length;
                     childMasses.Add(mass);
 
-                    var childBodyInertia = box.ComputeInertia(mass);
-
+                    BodyInertia childBodyInertia = box.ComputeInertia(mass);
                     Symmetric3x3 childLocalInertia;
                     Symmetric3x3.Invert(childBodyInertia.InverseInertiaTensor, out childLocalInertia);
                     childLocalInertias.Add(childLocalInertia);
                 }
             }
+
+            if (elem.Children == null || elem.Children.Length == 0)
+                return;
+
+            for (int i = 0; i < elem.Children.Length; i++)
+            {
+                ShapeElement child = elem.Children[i];
+                string childName = child.Name ?? string.Empty;
+                string childPath = path.Length == 0 ? childName : path + "/" + childName;
+
+                AppendSelectedElementsRecursive(
+                    child,
+                    world,
+                    childPath,
+                    selected,
+                    shapes,
+                    children,
+                    childMasses,
+                    childLocalInertias,
+                    manualBoxes
+                );
+            }
         }
+
+        private bool MatchesAnySelector(string path)
+        {
+            if (config == null || config.Length == 0)
+                return false;
+
+            for (int i = 0; i < config.Length; i++)
+            {
+                string selector = config[i];
+                if (string.IsNullOrWhiteSpace(selector))
+                    continue;
+
+                if (WildcardMatch(path, selector))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool WildcardMatch(string text, string pattern)
+        {
+            int t = 0;
+            int p = 0;
+            int star = -1;
+            int match = 0;
+
+            while (t < text.Length)
+            {
+                if (p < pattern.Length && (pattern[p] == '?' || pattern[p] == text[t]))
+                {
+                    t++;
+                    p++;
+                    continue;
+                }
+
+                if (p < pattern.Length && pattern[p] == '*')
+                {
+                    star = p++;
+                    match = t;
+                    continue;
+                }
+
+                if (star != -1)
+                {
+                    p = star + 1;
+                    t = ++match;
+                    continue;
+                }
+
+                return false;
+            }
+
+            while (p < pattern.Length && pattern[p] == '*')
+                p++;
+
+            return p == pattern.Length;
+        }
+
         private void AppendElementRecursive(
             ShapeElement elem,
             Matrix4x4 parentWorld,
