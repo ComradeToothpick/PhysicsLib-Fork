@@ -10,7 +10,10 @@
           "ORIGIN/ORIGIN-Section1/*",
           "ORIGIN/ORIGIN-Section2/*",
           "ORIGIN/ORIGIN-Prow/*",
-          "ORIGIN/ORIGIN-Prow2/*"
+          "ORIGIN/ORIGIN-Prow2/GunwhaleS4/*",
+          "ORIGIN/ORIGIN-Prow2/GunwhaleN4/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorS6/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorN5/*"
         ]
       }
     ]
@@ -26,7 +29,10 @@
           "ORIGIN/ORIGIN-Section1/*",
           "ORIGIN/ORIGIN-Section2/*",
           "ORIGIN/ORIGIN-Prow/*",
-          "ORIGIN/ORIGIN-Prow2/*"
+          "ORIGIN/ORIGIN-Prow2/GunwhaleS4/*",
+          "ORIGIN/ORIGIN-Prow2/GunwhaleN4/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorS6/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorN5/*"
         ]
       }
     ]

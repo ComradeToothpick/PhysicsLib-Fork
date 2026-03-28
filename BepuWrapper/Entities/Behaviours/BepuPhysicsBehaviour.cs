@@ -733,14 +733,24 @@ namespace BepuWrapper.Entities.Behaviours
             bodyPosition = Vector3.Zero;
             bodyOrientation = Quaternion.Identity;
 
-            if (physics?.bepu == null)
+            if (entity?.Pos == null)
                 return false;
 
-            //if (physics.bepu.TryGetEntityBodyPose(entity, out bodyPosition, out bodyOrientation))
-            //    return true; TODO: [AD] Look at this
+            EntityPos pos = entity.Pos;
 
-            bodyPosition = ToBepu(entity.Pos.X, entity.Pos.Y, entity.Pos.Z) + localCenterOfMassOffset;
-            bodyOrientation = Quaternion.Identity;
+            Quaternion entityRotation = Quaternion.CreateFromYawPitchRoll(
+                pos.Yaw,
+                pos.Pitch,
+                pos.Roll
+            );
+
+            Quaternion correction = Quaternion.CreateFromAxisAngle(Vector3.UnitY, MathF.PI / 2f);
+
+            bodyOrientation = Quaternion.Normalize(entityRotation * correction);
+
+            Vector3 entityOrigin = ToBepu(pos.X, pos.Y, pos.Z);
+            bodyPosition = entityOrigin + Vector3.Transform(localCenterOfMassOffset, bodyOrientation);
+
             return true;
         }
 
