@@ -1,0 +1,38 @@
+[
+  {
+    "file": "vsairshipmod:entities/air/tier1entity",
+    "op": "remove",
+    "path": "/server/behaviors/0"
+  },
+  {
+    "file": "vsairshipmod:entities/air/tier1entity",
+    "op": "remove",
+    "path": "/client/behaviors/0"
+  },
+  {
+    "file": "vsairshipmod:entities/air/tier1entity",
+    "op": "addmerge",
+    "path": "/server/behaviors",
+    "value": [
+      {
+        "code": "bepu-physics",
+        "selectors": [
+          "ORIGINAirship/BARREL SEAT/origin barrel/*"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "vsairshipmod:entities/air/tier1entity",
+    "op": "addmerge",
+    "path": "/client/behaviors",
+    "value": [
+      {
+        "code": "bepu-physics",
+        "selectors": [
+          "ORIGINAirship/BARREL SEAT/origin barrel/*"
+        ]
+      }
+    ]
+  }
+]

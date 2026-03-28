@@ -1,4 +1,6 @@
-﻿using BepuWrapper.Entities.Behaviours;
+﻿using BepuWrapper.Api.CollisionSource;
+using BepuWrapper.Entities.Behaviours;
+using BepuWrapper.patches;
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -10,14 +12,18 @@ namespace BepuWrapper
     public class BepuWrapperModSystem : ModSystem
     {
         public BepuWorld bepu;
+        private Harmony harmony;
 
         // Called on server and client
         // Useful for registering block/entity classes on both sides
         public override void Start(ICoreAPI api)
         {
-            var harmony = new Harmony(Mod.Info.ModID);
+            harmony = new Harmony(Mod.Info.ModID);
             harmony.PatchAll();
             bepu = new BepuWorld(api);
+            var dynamicSource = new BepuDynamicCollisionSource(api);
+            CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = dynamicSource;
+            CollisionTester_IsColliding_Patch.DynamicCollisionSource = dynamicSource;
             Mod.Logger.Notification("Hello from template mod: " + api.Side);
             api.RegisterEntityBehaviorClass("bepu-physics", typeof(BepuPhysicsBehaviour));
         }
@@ -30,6 +36,20 @@ namespace BepuWrapper
         public override void StartClientSide(ICoreClientAPI api)
         {
             Mod.Logger.Notification("Hello from template mod client side: " + Lang.Get("bepuwrapper:hello"));
+        }
+
+        public override void Dispose()
+        {
+            CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = null;
+            CollisionTester_IsColliding_Patch.DynamicCollisionSource = null;
+
+            if (harmony != null)
+            {
+                harmony.UnpatchAll(harmony.Id);
+                harmony = null;
+            }
+
+            base.Dispose();
         }
     }
 }

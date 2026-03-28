@@ -1,0 +1,38 @@
+[
+  {
+    "file": "vsairshipmod:entities/air/tier2entity",
+    "op": "remove",
+    "path": "/server/behaviors/0"
+  },
+  {
+    "file": "vsairshipmod:entities/air/tier2entity",
+    "op": "remove",
+    "path": "/client/behaviors/0"
+  },
+  {
+    "file": "vsairshipmod:entities/air/tier2entity",
+    "op": "addmerge",
+    "path": "/server/behaviors",
+    "value": [
+      {
+        "code": "bepu-physics",
+        "selectors": [
+          "ORIGINT2/BEARBOAT/*"
+        ]
+      }
+    ]
+  },
+  {
+    "file": "vsairshipmod:entities/air/tier2entity",
+    "op": "addmerge",
+    "path": "/client/behaviors",
+    "value": [
+      {
+        "code": "bepu-physics",
+        "selectors": [
+          "ORIGINT2/BEARBOAT/*"
+        ]
+      }
+    ]
+  }
+]

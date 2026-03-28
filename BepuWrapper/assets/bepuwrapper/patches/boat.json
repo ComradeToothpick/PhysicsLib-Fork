@@ -1,6 +1,16 @@
 [
   {
     "file": "game:entities/nonliving/boat-sailed",
+    "op": "remove",
+    "path": "/server/behaviors/0"
+  },
+  {
+    "file": "game:entities/nonliving/boat-sailed",
+    "op": "remove",
+    "path": "/client/behaviors/0"
+  },
+  {
+    "file": "game:entities/nonliving/boat-sailed",
     "op": "addmerge",
     "path": "/server/behaviors",
     "value": [
@@ -10,7 +20,10 @@
           "ORIGIN/ORIGIN-Section1/*",
           "ORIGIN/ORIGIN-Section2/*",
           "ORIGIN/ORIGIN-Prow/*",
-          "ORIGIN/ORIGIN-Prow2/*"
+          "ORIGIN/ORIGIN-Prow2/GunwhaleS4/*",
+          "ORIGIN/ORIGIN-Prow2/GunwhaleN4/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorS6/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorN5/*"
         ]
       }
     ]
@@ -26,7 +39,10 @@
           "ORIGIN/ORIGIN-Section1/*",
           "ORIGIN/ORIGIN-Section2/*",
           "ORIGIN/ORIGIN-Prow/*",
-          "ORIGIN/ORIGIN-Prow2/*"
+          "ORIGIN/ORIGIN-Prow2/GunwhaleS4/*",
+          "ORIGIN/ORIGIN-Prow2/GunwhaleN4/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorS6/*",
+          "ORIGIN/ORIGIN-Prow2/ProwFloorN5/*"
         ]
       }
     ]
