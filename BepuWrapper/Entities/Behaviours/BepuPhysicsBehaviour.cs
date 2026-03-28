@@ -204,10 +204,50 @@ namespace BepuWrapper.Entities.Behaviours
             return Vector3.Transform(p, m);
         }
 
+        private static Vector3 TransformDirection(Matrix4x4 m, Vector3 v)
+        {
+            return Vector3.TransformNormal(v, m);
+        }
+
+        private static Quaternion ExtractPureRotation(Matrix4x4 m)
+        {
+            Vector3 x = TransformDirection(m, Vector3.UnitX);
+            Vector3 y = TransformDirection(m, Vector3.UnitY);
+            Vector3 z = TransformDirection(m, Vector3.UnitZ);
+
+            if (x.LengthSquared() <= 1e-10f || y.LengthSquared() <= 1e-10f || z.LengthSquared() <= 1e-10f)
+                return Quaternion.Identity;
+
+            x = Vector3.Normalize(x);
+            y = Vector3.Normalize(y);
+
+            // Rebuild an orthonormal basis to avoid drift / decomposition weirdness.
+            z = Vector3.Normalize(Vector3.Cross(x, y));
+            y = Vector3.Normalize(Vector3.Cross(z, x));
+
+            Matrix4x4 rot = new Matrix4x4(
+                x.X, x.Y, x.Z, 0f,
+                y.X, y.Y, y.Z, 0f,
+                z.X, z.Y, z.Z, 0f,
+                0f, 0f, 0f, 1f
+            );
+
+            return Quaternion.Normalize(Quaternion.CreateFromRotationMatrix(rot));
+        }
+
         private static Quaternion ExtractRotation(Matrix4x4 m)
         {
             Matrix4x4.Decompose(m, out _, out var rotation, out _);
             return Quaternion.Normalize(rotation);
+        }
+
+        private static Vector3 ExtractAxisScale(Matrix4x4 m)
+        {
+            Vector3 x = TransformDirection(m, Vector3.UnitX);
+            Vector3 y = TransformDirection(m, Vector3.UnitY);
+            Vector3 z = TransformDirection(m, Vector3.UnitZ);
+
+            return new Vector3(x.Length(), y.Length(), z.Length());
         }
 
         private static Vector3 ExtractScale(Matrix4x4 m)
@@ -228,19 +268,41 @@ namespace BepuWrapper.Entities.Behaviours
             float fy = elem.From != null ? (float)elem.From[1] / 16f : 0f;
             float fz = elem.From != null ? (float)elem.From[2] / 16f : 0f;
 
-            Matrix4x4 toOrigin = Matrix4x4.CreateTranslation(-ox, -oy, -oz);
-            Matrix4x4 fromOrigin = Matrix4x4.CreateTranslation(ox, oy, oz);
+            float sx = (float)elem.ScaleX;
+            float sy = (float)elem.ScaleY;
+            float sz = (float)elem.ScaleZ;
 
-            Matrix4x4 rotation = Matrix4x4.CreateFromYawPitchRoll(
-                DegreesToRadians((float)elem.RotationY),
-                DegreesToRadians((float)elem.RotationX),
-                DegreesToRadians((float)elem.RotationZ)
-            );
+            Matrix4x4 translateToRotationOrigin = Matrix4x4.CreateTranslation(ox, oy, oz);
+            Matrix4x4 rotateX = elem.RotationX != 0.0
+                ? Matrix4x4.CreateRotationX(DegreesToRadians((float)elem.RotationX))
+                : Matrix4x4.Identity;
+            Matrix4x4 rotateY = elem.RotationY != 0.0
+                ? Matrix4x4.CreateRotationY(DegreesToRadians((float)elem.RotationY))
+                : Matrix4x4.Identity;
+            Matrix4x4 rotateZ = elem.RotationZ != 0.0
+                ? Matrix4x4.CreateRotationZ(DegreesToRadians((float)elem.RotationZ))
+                : Matrix4x4.Identity;
+            Matrix4x4 scale = (sx != 1f || sy != 1f || sz != 1f)
+                ? Matrix4x4.CreateScale(sx, sy, sz)
+                : Matrix4x4.Identity;
 
-            Matrix4x4 scale = Matrix4x4.CreateScale((float)elem.ScaleX, (float)elem.ScaleY, (float)elem.ScaleZ);
-            Matrix4x4 translation = Matrix4x4.CreateTranslation(fx, fy, fz);
+            Matrix4x4 translateFromOriginToElementFrom = Matrix4x4.CreateTranslation(fx - ox, fy - oy, fz - oz);
 
-            return toOrigin * scale * rotation * fromOrigin * translation;
+            // Mirrors ShapeTesselator:
+            // Translate(rotationOrigin)
+            // RotateX
+            // RotateY
+            // RotateZ
+            // Scale
+            // Translate(from - rotationOrigin)
+            //
+            // For System.Numerics row-vector multiplication, the equivalent composed matrix is:
+            return translateFromOriginToElementFrom
+                * scale
+                * rotateZ
+                * rotateY
+                * rotateX
+                * translateToRotationOrigin;
         }
 
         private BuiltCompound BuildCompoundFromShape(Shape shape, Shapes shapes, BufferPool bufferPool)
@@ -255,10 +317,13 @@ namespace BepuWrapper.Entities.Behaviours
 
             for (int i = 0; i < shape.Elements.Length; i++)
             {
+                ShapeElement root = shape.Elements[i];
+                string rootPath = root.Name ?? string.Empty;
+
                 AppendSelectedElementsRecursive(
-                    shape.Elements[i],
+                    root,
                     Matrix4x4.Identity,
-                    shape.Elements[i].Name ?? string.Empty,
+                    rootPath,
                     false,
                     shapes,
                     children,
@@ -281,16 +346,19 @@ namespace BepuWrapper.Entities.Behaviours
                 children[i] = child;
             }
 
-            float broadphaseRadius = 0f;
             for (int i = 0; i < manualBoxes.Count; i++)
             {
                 ManualChildBox box = manualBoxes[i];
                 box.LocalPosition -= centerOfMass;
                 manualBoxes[i] = box;
+            }
 
+            float broadphaseRadius = 0f;
+            for (int i = 0; i < manualBoxes.Count; i++)
+            {
+                ManualChildBox box = manualBoxes[i];
                 float extent = box.LocalPosition.Length() + box.HalfExtents.Length();
-                if (extent > broadphaseRadius)
-                    broadphaseRadius = extent;
+                if (extent > broadphaseRadius) broadphaseRadius = extent;
             }
 
             bufferPool.Take<CompoundChild>(children.Count, out var childBuffer);
@@ -312,19 +380,21 @@ namespace BepuWrapper.Entities.Behaviours
         }
 
         private void AppendSelectedElementsRecursive(
-            ShapeElement elem,
-            Matrix4x4 parentWorld,
-            string path,
-            bool parentSelected,
-            Shapes shapes,
-            List<CompoundChild> children,
-            List<float> childMasses,
-            List<Symmetric3x3> childLocalInertias,
-            List<ManualChildBox> manualBoxes)
+    ShapeElement elem,
+    Matrix4x4 parentWorld,
+    string path,
+    bool parentSelected,
+    Shapes shapes,
+    List<CompoundChild> children,
+    List<float> childMasses,
+    List<Symmetric3x3> childLocalInertias,
+    List<ManualChildBox> manualBoxes)
         {
             bool selected = parentSelected || MatchesAnySelector(path);
 
             Matrix4x4 local = CreateVsElementLocalMatrix(elem);
+
+            // This matches the working version of your recursive composition for System.Numerics use here.
             Matrix4x4 world = local * parentWorld;
 
             if (selected && elem.From != null && elem.To != null)
@@ -337,36 +407,40 @@ namespace BepuWrapper.Entities.Behaviours
                 {
                     Vector3 localCenter = new Vector3(sx * 0.5f, sy * 0.5f, sz * 0.5f);
                     Vector3 childPosition = TransformPoint(world, localCenter);
-                    Quaternion childOrientation = ExtractRotation(world);
-                    Vector3 worldScale = ExtractScale(world);
 
-                    float width = MathF.Abs(sx * worldScale.X);
-                    float height = MathF.Abs(sy * worldScale.Y);
-                    float length = MathF.Abs(sz * worldScale.Z);
+                    Quaternion childOrientation = ExtractPureRotation(world);
+                    Vector3 axisScale = ExtractAxisScale(world);
 
-                    Box box = new Box(width, height, length);
-                    TypedIndex shapeIndex = shapes.Add(box);
+                    float width = MathF.Abs(sx * axisScale.X);
+                    float height = MathF.Abs(sy * axisScale.Y);
+                    float length = MathF.Abs(sz * axisScale.Z);
 
-                    children.Add(new CompoundChild
+                    if (width > 1e-5f && height > 1e-5f && length > 1e-5f)
                     {
-                        LocalPose = new RigidPose(childPosition, childOrientation),
-                        ShapeIndex = shapeIndex
-                    });
+                        Box box = new Box(width, height, length);
+                        TypedIndex shapeIndex = shapes.Add(box);
 
-                    manualBoxes.Add(new ManualChildBox
-                    {
-                        LocalPosition = childPosition,
-                        LocalOrientation = childOrientation,
-                        HalfExtents = new Vector3(width * 0.5f, height * 0.5f, length * 0.5f)
-                    });
+                        children.Add(new CompoundChild
+                        {
+                            LocalPose = new RigidPose(childPosition, childOrientation),
+                            ShapeIndex = shapeIndex
+                        });
 
-                    float mass = width * height * length;
-                    childMasses.Add(mass);
+                        manualBoxes.Add(new ManualChildBox
+                        {
+                            LocalPosition = childPosition,
+                            LocalOrientation = childOrientation,
+                            HalfExtents = new Vector3(width * 0.5f, height * 0.5f, length * 0.5f)
+                        });
 
-                    BodyInertia childBodyInertia = box.ComputeInertia(mass);
-                    Symmetric3x3 childLocalInertia;
-                    Symmetric3x3.Invert(childBodyInertia.InverseInertiaTensor, out childLocalInertia);
-                    childLocalInertias.Add(childLocalInertia);
+                        float mass = width * height * length;
+                        childMasses.Add(mass);
+
+                        BodyInertia childBodyInertia = box.ComputeInertia(mass);
+                        Symmetric3x3 childLocalInertia;
+                        Symmetric3x3.Invert(childBodyInertia.InverseInertiaTensor, out childLocalInertia);
+                        childLocalInertias.Add(childLocalInertia);
+                    }
                 }
             }
 
