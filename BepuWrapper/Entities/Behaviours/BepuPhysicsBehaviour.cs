@@ -2,6 +2,7 @@
 using BepuPhysics.Collidables;
 using BepuUtilities;
 using BepuUtilities.Memory;
+using BepuWrapper.Api;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -25,7 +26,6 @@ namespace BepuWrapper.Entities.Behaviours
         private readonly List<ManualChildBox> manualChildBoxes = new();
         private float compoundBroadphaseRadius;
 
-        private float pushAccum;
         private Vector3 lastBodyOrigin;
         private bool hadLastBodyOrigin;
 
@@ -566,7 +566,7 @@ namespace BepuWrapper.Entities.Behaviours
             return result;
         }
 
-        private static void AppendElement(
+        private void AppendElement(
             ShapeElement elem,
             Matrix4x4 parentWorld,
             Shapes shapes,
@@ -621,99 +621,6 @@ namespace BepuWrapper.Entities.Behaviours
                     childLocalInertias.Add(childLocalInertia);
                 }
             }
-        }
-
-        private void AppendElementRecursive(
-            ShapeElement elem,
-            Matrix4x4 parentWorld,
-            Shapes shapes,
-            List<CompoundChild> children,
-            List<float> childMasses,
-            List<Symmetric3x3> childLocalInertias,
-            List<ManualChildBox> manualBoxes)
-        {
-            var local = CreateVsElementLocalMatrix(elem);
-            var world = local * parentWorld;
-
-            if (elem.From != null && elem.To != null)
-            {
-                float sx = ((float)elem.To[0] - (float)elem.From[0]) / 16f;
-                float sy = ((float)elem.To[1] - (float)elem.From[1]) / 16f;
-                float sz = ((float)elem.To[2] - (float)elem.From[2]) / 16f;
-
-                if (sx > 0f && sy > 0f && sz > 0f)
-                {
-                    var localCenter = new Vector3(sx * 0.5f, sy * 0.5f, sz * 0.5f);
-                    var childPosition = TransformPoint(world, localCenter);
-                    var childOrientation = ExtractRotation(world);
-                    var worldScale = ExtractScale(world);
-
-                    float width = MathF.Abs(sx * worldScale.X);
-                    float height = MathF.Abs(sy * worldScale.Y);
-                    float length = MathF.Abs(sz * worldScale.Z);
-
-                    var box = new Box(width, height, length);
-                    var shapeIndex = shapes.Add(box);
-
-                    children.Add(new CompoundChild()
-                    {
-                        LocalPose = new RigidPose(childPosition, childOrientation),
-                        ShapeIndex = shapeIndex
-                    });
-
-                    if (width >= 0.05f && height >= 0.05f && length >= 0.05f)
-                    {
-                        manualBoxes.Add(new ManualChildBox
-                        {
-                            LocalPosition = childPosition,
-                            LocalOrientation = childOrientation,
-                            HalfExtents = new Vector3(width * 0.5f, height * 0.5f, length * 0.5f)
-                        });
-                    }
-
-                    float mass = width * height * length;
-                    childMasses.Add(mass);
-
-                    var childBodyInertia = box.ComputeInertia(mass);
-
-                    Symmetric3x3 childLocalInertia;
-                    Symmetric3x3.Invert(childBodyInertia.InverseInertiaTensor, out childLocalInertia);
-                    childLocalInertias.Add(childLocalInertia);
-                }
-            }
-
-            if (elem.Children == null)
-                return;
-
-            for (int i = 0; i < elem.Children.Length; i++)
-            {
-                AppendElementRecursive(elem.Children[i], world, shapes, children, childMasses, childLocalInertias, manualBoxes);
-            }
-        }
-
-        public struct ManualChildBox
-        {
-            public Vector3 LocalPosition;
-            public Quaternion LocalOrientation;
-            public Vector3 HalfExtents;
-        }
-
-        public struct BuiltCompound
-        {
-            public Compound Compound;
-            public BodyInertia Inertia;
-            public Vector3 LocalCenterOfMassOffset;
-            public List<ManualChildBox> ManualChildBoxes;
-            public float BroadphaseRadius;
-        }
-
-        public struct CachedCompound
-        {
-            public TypedIndex CompoundIndex;
-            public BodyInertia Inertia;
-            public Vector3 LocalCenterOfMassOffset;
-            public List<ManualChildBox> ManualChildBoxes;
-            public float BroadphaseRadius;
         }
     }
 }

@@ -1,9 +1,4 @@
-﻿using BepuPhysics;
-using BepuPhysics.Collidables;
-using BepuPhysics.CollisionDetection;
-using BepuUtilities;
-using BepuUtilities.Memory;
-using BepuWrapper.Entities.Behaviours;
+﻿using BepuWrapper.Entities.Behaviours;
 using HarmonyLib;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
