@@ -51,7 +51,7 @@ namespace BepuWrapper.Api.CollisionSource
                 if (candidate == null || (movingEntity != null && candidate.EntityId == movingEntity.EntityId))
                     continue;
 
-                BepuPhysicsBehaviour bepuBehavior = candidate.GetBehavior<BepuPhysicsBehaviour>();
+                BepuPhysicsBehaviour bepuBehavior = candidate.GetBehavior<BepuPhysicsBehaviour>()!;
                 if (bepuBehavior == null)
                     continue;
 

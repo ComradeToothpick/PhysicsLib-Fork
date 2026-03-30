@@ -1,10 +1,4 @@
-﻿using BepuPhysics;
-using BepuPhysics.Collidables;
-using BepuUtilities;
-using BepuUtilities.Memory;
-using BepuWrapper.Api;
-using BepuWrapper.Client;
-using BepuWrapper.patches;
+﻿using BepuWrapper.Api;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -18,14 +12,13 @@ namespace BepuWrapper.Entities.Behaviours
 {
     public class BepuPhysicsBehaviour : PhysicsBehaviorBase
     {
-        private ICoreAPI api;
-        private BepuWrapperModSystem physics;
-        private string[] selectors;
+        private ICoreAPI? api;
+        private BepuWrapperModSystem? physics;
+        private string[]? selectors;
 
         private Vector3 localCenterOfMassOffset;
 
         private readonly List<ManualChildBox> manualChildBoxes = new();
-        private float compoundBroadphaseRadius;
 
         private Vector3 previousCarryPosition;
         private Quaternion previousCarryRotation = Quaternion.Identity;
@@ -57,7 +50,7 @@ namespace BepuWrapper.Entities.Behaviours
             var shapeLoc = shape.Base.Clone();
             shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
 
-            CachedCompound? cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
+            BuiltCompound? cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
 
             if (cachedShape == null)
             {
@@ -75,7 +68,7 @@ namespace BepuWrapper.Entities.Behaviours
                     return;
                 }
 
-                var built = BuildCompoundFromShape(compoundShape, physics.bepu.sim.Shapes);
+                var built = BuildCompoundFromShape(compoundShape);
                 cachedShape = physics.AddCompoundShape(shapeLoc.Path, built);
             }
 
@@ -83,21 +76,6 @@ namespace BepuWrapper.Entities.Behaviours
 
             manualChildBoxes.Clear();
             manualChildBoxes.AddRange(cachedShape.Value.ManualChildBoxes);
-            compoundBroadphaseRadius = cachedShape.Value.BroadphaseRadius;
-
-            var bodyPose = new RigidPose(
-                ToBepu(entity.Pos.X, entity.Pos.Y, entity.Pos.Z) + localCenterOfMassOffset,
-                Quaternion.Identity
-            );
-
-            var bodyDescription = BodyDescription.CreateDynamic(
-                bodyPose.Position,
-                cachedShape.Value.Inertia,
-                compoundShapeIndex,
-                0.05f
-            );
-
-            physics.bepu.RegisterEntityBody(entity, bodyDescription, localCenterOfMassOffset);
         }
 
         public override void OnGameTick(float deltaTime)
@@ -358,9 +336,7 @@ namespace BepuWrapper.Entities.Behaviours
 
         private BuiltCompound BuildCompoundFromShape(Shape shape)
         {
-            var children = new List<CompoundChild>();
             var childMasses = new List<float>();
-            var childLocalInertias = new List<Symmetric3x3>();
             var manualBoxes = new List<ManualChildBox>();
 
             if (shape.Elements == null || shape.Elements.Length == 0)
@@ -376,23 +352,15 @@ namespace BepuWrapper.Entities.Behaviours
                     Matrix4x4.Identity,
                     rootPath,
                     false,
-                    children,
                     childMasses,
                     manualBoxes
                 );
             }
 
-            if (children.Count == 0)
+            if (manualBoxes.Count == 0)
                 throw new InvalidOperationException("Shape produced no collider children.");
 
-            Vector3 centerOfMass = ComputeCenterOfMass(children, childMasses);
-
-            for (int i = 0; i < children.Count; i++)
-            {
-                CompoundChild child = children[i];
-                child.LocalPose.Position -= centerOfMass;
-                children[i] = child;
-            }
+            Vector3 centerOfMass = ComputeCenterOfMass(manualBoxes, childMasses);
 
             for (int i = 0; i < manualBoxes.Count; i++)
             {
@@ -409,20 +377,10 @@ namespace BepuWrapper.Entities.Behaviours
                 if (extent > broadphaseRadius) broadphaseRadius = extent;
             }
 
-            bufferPool.Take<CompoundChild>(children.Count, out var childBuffer);
-            for (int i = 0; i < children.Count; i++)
-            {
-                childBuffer[i] = children[i];
-            }
-
-            Compound compound = new Compound(childBuffer);
-
             return new BuiltCompound
             {
-                Compound = compound,
                 LocalCenterOfMassOffset = centerOfMass,
                 ManualChildBoxes = manualBoxes,
-                BroadphaseRadius = broadphaseRadius
             };
         }
 
@@ -431,7 +389,6 @@ namespace BepuWrapper.Entities.Behaviours
             Matrix4x4 parentWorld,
             string path,
             bool parentSelected,
-            List<CompoundChild> children,
             List<float> childMasses,
             List<ManualChildBox> manualBoxes)
         {
@@ -462,14 +419,6 @@ namespace BepuWrapper.Entities.Behaviours
 
                     if (width > 1e-5f && height > 1e-5f && length > 1e-5f)
                     {
-                        Box box = new Box(width, height, length);
-                        TypedIndex shapeIndex = shapes.Add(box);
-
-                        children.Add(new CompoundChild
-                        {
-                            LocalPose = new RigidPose(childPosition, childOrientation),
-                            ShapeIndex = shapeIndex
-                        });
 
                         manualBoxes.Add(new ManualChildBox
                         {
@@ -480,11 +429,6 @@ namespace BepuWrapper.Entities.Behaviours
 
                         float mass = width * height * length;
                         childMasses.Add(mass);
-
-                        BodyInertia childBodyInertia = box.ComputeInertia(mass);
-                        Symmetric3x3 childLocalInertia;
-                        Symmetric3x3.Invert(childBodyInertia.InverseInertiaTensor, out childLocalInertia);
-                        childLocalInertias.Add(childLocalInertia);
                     }
                 }
             }
@@ -503,7 +447,6 @@ namespace BepuWrapper.Entities.Behaviours
                     world,
                     childPath,
                     selected,
-                    children,
                     childMasses,
                     manualBoxes
                 );
@@ -570,7 +513,6 @@ namespace BepuWrapper.Entities.Behaviours
         private void AppendElementRecursive(
             ShapeElement elem,
             Matrix4x4 parentWorld,
-            List<CompoundChild> children,
             List<float> childMasses,
             List<ManualChildBox> manualBoxes)
         {
@@ -594,16 +536,6 @@ namespace BepuWrapper.Entities.Behaviours
                     float height = MathF.Abs(sy * worldScale.Y);
                     float length = MathF.Abs(sz * worldScale.Z);
 
-                    var box = new Box(width, height, length);
-                    var shapeIndex = shapes.Add(box);
-
-                    children.Add(new CompoundChild
-                    {
-                        Position = childPosition,
-                        Orientation = childOrientation,
-                        ShapeIndex = shapeIndex
-                    });
-
                     manualBoxes.Add(new ManualChildBox
                     {
                         LocalPosition = childPosition,
@@ -613,12 +545,6 @@ namespace BepuWrapper.Entities.Behaviours
 
                     float mass = width * height * length;
                     childMasses.Add(mass);
-
-                    var childBodyInertia = box.ComputeInertia(mass);
-
-                    Symmetric3x3 childLocalInertia;
-                    Symmetric3x3.Invert(childBodyInertia.InverseInertiaTensor, out childLocalInertia);
-                    childLocalInertias.Add(childLocalInertia);
                 }
             }
 
@@ -630,16 +556,13 @@ namespace BepuWrapper.Entities.Behaviours
                 AppendElementRecursive(
                     elem.Children[i],
                     world,
-                    shapes,
-                    children,
                     childMasses,
-                    childLocalInertias,
                     manualBoxes
                 );
             }
         }
 
-        private Vector3 ComputeCenterOfMass(List<CompoundChild> children, List<float> childMasses)
+        private Vector3 ComputeCenterOfMass(List<ManualChildBox> children, List<float> childMasses)
         {
             float totalMass = 0f;
             Vector3 weightedSum = Vector3.Zero;
@@ -648,7 +571,7 @@ namespace BepuWrapper.Entities.Behaviours
             {
                 float mass = childMasses[i];
                 totalMass += mass;
-                weightedSum += children[i].LocalPose.Position * mass;
+                weightedSum += children[i].LocalPosition * mass;
             }
 
             if (totalMass <= 0f)

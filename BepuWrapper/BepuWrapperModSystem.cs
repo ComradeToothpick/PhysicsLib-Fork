@@ -14,8 +14,8 @@ namespace BepuWrapper
 {
     public class BepuWrapperModSystem : ModSystem
     {
-        private Harmony harmony;
-        private Dictionary<string, CachedCompound> ComputedShapes = new Dictionary<string, CachedCompound>();
+        private Harmony? harmony;
+        private Dictionary<string, BuiltCompound> ComputedShapes = new Dictionary<string, BuiltCompound>();
 
         // Called on server and client
         // Useful for registering block/entity classes on both sides
@@ -41,35 +41,27 @@ namespace BepuWrapper
         }
 
 
-        public CachedCompound AddCompoundShape(string shapeCode, BuiltCompound shape)
+        public BuiltCompound AddCompoundShape(string shapeCode, BuiltCompound shape)
         {
-            var cacheItem = new CachedCompound()
-            {
-                BroadphaseRadius = shape.BroadphaseRadius,
-                Inertia = shape.Inertia,
-                LocalCenterOfMassOffset = shape.LocalCenterOfMassOffset,
-                ManualChildBoxes = shape.ManualChildBoxes
-            };
+            ComputedShapes.TryAdd(shapeCode, shape);
 
-            ComputedShapes.TryAdd(shapeCode, cacheItem);
-
-            return cacheItem;
+            return shape;
         }
 
-        public CachedCompound? TryGetCompoundShape(string shapeCode)
+        public BuiltCompound? TryGetCompoundShape(string shapeCode)
         {
             return ComputedShapes.ContainsKey(shapeCode) ? ComputedShapes.Get(shapeCode) : null;
         }
 
         public override void Dispose()
         {
-            CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = null;
-            CollisionTester_IsColliding_Patch.DynamicCollisionSource = null;
+            CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = null!;
+            CollisionTester_IsColliding_Patch.DynamicCollisionSource = null!;
 
             if (harmony != null)
             {
                 harmony.UnpatchAll(harmony.Id);
-                harmony = null;
+                harmony = null!;
             }
 
             base.Dispose();

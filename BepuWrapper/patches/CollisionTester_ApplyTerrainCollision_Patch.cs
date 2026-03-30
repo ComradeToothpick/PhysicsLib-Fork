@@ -14,11 +14,11 @@ namespace BepuWrapper.patches
     [HarmonyPatch(typeof(CollisionTester), nameof(CollisionTester.ApplyTerrainCollision))]
     public static class CollisionTester_ApplyTerrainCollision_Patch
     {
-        public static IBepuDynamicCollisionSource DynamicCollisionSource;
+        public static IBepuDynamicCollisionSource? DynamicCollisionSource;
 
         private class SupportState
         {
-            public Entity SupportEntity;
+            public Entity? SupportEntity;
             public int GraceTicks;
         }
 
@@ -27,12 +27,12 @@ namespace BepuWrapper.patches
 
         public static bool TryGetStandingOnEntity(Entity entity, out Entity standingOnEntity)
         {
-            standingOnEntity = null;
+            standingOnEntity = null!;
 
             if (entity == null)
                 return false;
 
-            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState state) || state == null)
+            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState? state) || state == null)
                 return false;
 
             if (state.SupportEntity == null)
@@ -102,7 +102,7 @@ namespace BepuWrapper.patches
                 return;
             }
 
-            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState state) || state == null)
+            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState? state) || state == null)
             {
                 state = new SupportState();
                 SupportStates[entity.EntityId] = state;
@@ -117,7 +117,7 @@ namespace BepuWrapper.patches
             if (entity == null)
                 return;
 
-            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState state) || state == null)
+            if (!SupportStates.TryGetValue(entity.EntityId, out SupportState? state) || state == null)
                 return;
 
             state.GraceTicks--;
@@ -234,7 +234,7 @@ namespace BepuWrapper.patches
 
             if (TryGetStandingOnEntity(entity, out Entity previousSupportEntity) && previousSupportEntity != null)
             {
-                BepuPhysicsBehaviour supportPhysics = previousSupportEntity.GetBehavior<BepuPhysicsBehaviour>();
+                BepuPhysicsBehaviour supportPhysics = previousSupportEntity.GetBehavior<BepuPhysicsBehaviour>()!;
                 if (supportPhysics != null)
                 {
                     Vec3d carryPoint = GetCarryPoint(entityBox);
@@ -342,7 +342,7 @@ namespace BepuWrapper.patches
 
             bool collidedVertically = false;
             bool standingOnDynamicEntity = false;
-            Entity supportEntity = null;
+            Entity supportEntity = null!;
 
             int terrainCount = tester.CollisionBoxList.Count;
             Cuboidd[] terrainBoxes = tester.CollisionBoxList.cuboids;
@@ -504,7 +504,7 @@ namespace BepuWrapper.patches
                 previousSupportEntity != null &&
                 IsEntityStillContainedBySupport(entity, previousSupportEntity, dynamicBoxes, entityBox);
 
-            Entity resolvedSupportEntity = null;
+            Entity resolvedSupportEntity = null!;
 
             if (standingOnDynamicEntity && supportEntity != null)
             {
@@ -513,8 +513,8 @@ namespace BepuWrapper.patches
             }
             else if (keepPreviousSupport)
             {
-                resolvedSupportEntity = previousSupportEntity;
-                SetStandingOnEntity(entity, previousSupportEntity);
+                resolvedSupportEntity = previousSupportEntity!;
+                SetStandingOnEntity(entity, previousSupportEntity!);
             }
             else
             {

@@ -10,7 +10,7 @@ namespace BepuWrapper.patches
     [HarmonyPatch(typeof(CollisionTester), nameof(CollisionTester.IsColliding))]
     public static class CollisionTester_IsColliding_Patch
     {
-        public static IBepuDynamicCollisionSource DynamicCollisionSource;
+        public static IBepuDynamicCollisionSource? DynamicCollisionSource;
 
         [HarmonyPostfix]
         public static void Postfix(
@@ -33,7 +33,7 @@ namespace BepuWrapper.patches
                 new List<DynamicCollisionBox>();
 
             DynamicCollisionSource.CollectCollisionBoxes(
-                null,
+                null!,
                 queryBox,
                 dynamicBoxes
             );
