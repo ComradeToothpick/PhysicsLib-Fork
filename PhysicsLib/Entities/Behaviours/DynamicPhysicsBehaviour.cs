@@ -223,7 +223,7 @@ namespace PhysicsLib.Entities.Behaviours
 
         public override string PropertyName() => "bepu-physics";
 
-        private static Vector3 ToBepu(double x, double y, double z)
+        private static Vector3 ToVector3(double x, double y, double z)
         {
             return new Vector3((float)x, (float)y, (float)z);
         }
@@ -636,7 +636,7 @@ namespace PhysicsLib.Entities.Behaviours
 
             bodyOrientation = Quaternion.Normalize(correction * entityRotation);
 
-            Vector3 entityOrigin = ToBepu(pos.X, pos.Y, pos.Z);
+            Vector3 entityOrigin = ToVector3(pos.X, pos.Y, pos.Z);
 
             Vector3 localAnchorCorrection = new Vector3(-0.5f, 0f, -0.5f);
 
