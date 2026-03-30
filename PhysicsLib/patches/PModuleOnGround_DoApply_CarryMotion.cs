@@ -1,10 +1,10 @@
-﻿using BepuWrapper.Entities.Behaviours;
+﻿using PhysicsLib.Entities.Behaviours;
 using HarmonyLib;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.patches
+namespace PhysicsLib.patches
 {
     //[HarmonyPatch(typeof(PModuleOnGround), nameof(PModuleOnGround.DoApply))]
     //public static class PModuleOnGround_DoApply_CarryMotion
@@ -15,7 +15,7 @@ namespace BepuWrapper.patches
     //        if (!(entity is EntityPlayer player)) return;
 
     //        var api = entity.Api;
-    //        var physics = api.ModLoader.GetModSystem<BepuWrapperModSystem>();
+    //        var physics = api.ModLoader.GetModSystem<PhysicsLibModSystem>();
 
     //        if (physics == null) return;
 

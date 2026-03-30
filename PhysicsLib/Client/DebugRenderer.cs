@@ -1,16 +1,16 @@
-﻿using BepuWrapper.Entities.Behaviours;
+﻿using PhysicsLib.Entities.Behaviours;
 using Vintagestory.API.Client;
 
-namespace BepuWrapper.Client
+namespace PhysicsLib.Client
 {
     public class DebugRenderer : IRenderer
     {
-        private readonly BepuPhysicsBehaviour behavior;
+        private readonly DynamicPhysicsBehaviour behavior;
 
         public double RenderOrder => 1;
         public int RenderRange => 9999;
 
-        public DebugRenderer(BepuPhysicsBehaviour behavior)
+        public DebugRenderer(DynamicPhysicsBehaviour behavior)
         {
             this.behavior = behavior;
         }
@@ -19,7 +19,7 @@ namespace BepuWrapper.Client
         {
             if (behavior.entity?.Alive == true)
             {
-                behavior.DebugRender(behavior.entity.Api as ICoreClientAPI);
+                behavior.DebugRender((behavior.entity.Api as ICoreClientAPI)!);
             }
         }
 

@@ -2,9 +2,9 @@
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.Api.CollisionSource
+namespace PhysicsLib.Api.CollisionSource
 {
-    public interface IBepuDynamicCollisionSource
+    public interface IDynamicCollisionSource
     {
         void CollectCollisionBoxes(Entity movingEntity, Cuboidd queryBox, List<DynamicCollisionBox> results);
     }

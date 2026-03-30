@@ -1,16 +1,16 @@
-﻿using BepuWrapper.Api;
-using BepuWrapper.Api.CollisionSource;
+﻿using PhysicsLib.Api;
+using PhysicsLib.Api.CollisionSource;
 using HarmonyLib;
 using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.patches
+namespace PhysicsLib.patches
 {
     [HarmonyPatch(typeof(CollisionTester), nameof(CollisionTester.IsColliding))]
     public static class CollisionTester_IsColliding_Patch
     {
-        public static IBepuDynamicCollisionSource DynamicCollisionSource;
+        public static IDynamicCollisionSource? DynamicCollisionSource;
 
         [HarmonyPostfix]
         public static void Postfix(
@@ -33,7 +33,7 @@ namespace BepuWrapper.patches
                 new List<DynamicCollisionBox>();
 
             DynamicCollisionSource.CollectCollisionBoxes(
-                null,
+                null!,
                 queryBox,
                 dynamicBoxes
             );

@@ -1,10 +1,10 @@
 {
     "$schema": "https://moddbcdn.vintagestory.at/schema/modinfo.latest.json",
     "type": "Code",
-    "modid": "bepuwrapper",
-    "name": "BepuWrapper",
+    "modid": "physicslib",
+    "name": "PhysicsLib",
     "authors": [
-        "Unknown"
+        "Davis99"
     ],
     "description": "To be added",
     "version": "1.0.0",
