@@ -1,4 +1,4 @@
-﻿using BepuWrapper.Api;
+﻿using PhysicsLib.Api;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -8,12 +8,12 @@ using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.Entities.Behaviours
+namespace PhysicsLib.Entities.Behaviours
 {
     public class BepuPhysicsBehaviour : PhysicsBehaviorBase
     {
         private ICoreAPI? api;
-        private BepuWrapperModSystem? physics;
+        private PhysicsLibModSystem? physics;
         private string[]? selectors;
 
         private Vector3 localCenterOfMassOffset;
@@ -44,7 +44,7 @@ namespace BepuWrapper.Entities.Behaviours
             selectors = attributes["selectors"].AsArray<string>();
 
             api = entity.Api;
-            physics = api.ModLoader.GetModSystem<BepuWrapperModSystem>();
+            physics = api.ModLoader.GetModSystem<PhysicsLibModSystem>();
 
             var shape = entity.Properties.Client.Shape;
             var shapeLoc = shape.Base.Clone();
@@ -57,14 +57,14 @@ namespace BepuWrapper.Entities.Behaviours
                 var asset = api.Assets.TryGet(shapeLoc);
                 if (asset == null)
                 {
-                    api.Logger.Warning("[bepuwrapper] Missing shape asset {0} for entity {1}", shapeLoc, entity.Code);
+                    api.Logger.Warning("[physicslib] Missing shape asset {0} for entity {1}", shapeLoc, entity.Code);
                     return;
                 }
 
                 var compoundShape = asset.ToObject<Shape>();
                 if (compoundShape == null || compoundShape.Elements == null || compoundShape.Elements.Length == 0)
                 {
-                    api.Logger.Warning("[bepuwrapper] Entity {0} has no loaded shape elements.", entity.Code);
+                    api.Logger.Warning("[physicslib] Entity {0} has no loaded shape elements.", entity.Code);
                     return;
                 }
 

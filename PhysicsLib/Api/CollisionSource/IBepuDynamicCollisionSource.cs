@@ -2,7 +2,7 @@
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.Api.CollisionSource
+namespace PhysicsLib.Api.CollisionSource
 {
     public interface IBepuDynamicCollisionSource
     {

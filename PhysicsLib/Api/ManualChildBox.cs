@@ -1,6 +1,6 @@
 ﻿using System.Numerics;
 
-namespace BepuWrapper.Api
+namespace PhysicsLib.Api
 {
     public struct ManualChildBox
     {

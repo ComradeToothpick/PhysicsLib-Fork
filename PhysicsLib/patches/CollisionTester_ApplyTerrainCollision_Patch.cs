@@ -1,6 +1,6 @@
-﻿using BepuWrapper.Api;
-using BepuWrapper.Api.CollisionSource;
-using BepuWrapper.Entities.Behaviours;
+﻿using PhysicsLib.Api;
+using PhysicsLib.Api.CollisionSource;
+using PhysicsLib.Entities.Behaviours;
 using HarmonyLib;
 using System;
 using System.Collections.Generic;
@@ -9,7 +9,7 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.patches
+namespace PhysicsLib.patches
 {
     [HarmonyPatch(typeof(CollisionTester), nameof(CollisionTester.ApplyTerrainCollision))]
     public static class CollisionTester_ApplyTerrainCollision_Patch

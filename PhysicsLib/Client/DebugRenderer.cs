@@ -1,7 +1,7 @@
-﻿using BepuWrapper.Entities.Behaviours;
+﻿using PhysicsLib.Entities.Behaviours;
 using Vintagestory.API.Client;
 
-namespace BepuWrapper.Client
+namespace PhysicsLib.Client
 {
     public class DebugRenderer : IRenderer
     {

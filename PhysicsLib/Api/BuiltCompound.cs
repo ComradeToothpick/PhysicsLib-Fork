@@ -1,7 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Numerics;
 
-namespace BepuWrapper.Api
+namespace PhysicsLib.Api
 {
     public struct BuiltCompound
     {

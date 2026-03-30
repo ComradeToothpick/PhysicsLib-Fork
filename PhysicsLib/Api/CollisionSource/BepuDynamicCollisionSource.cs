@@ -1,12 +1,12 @@
-﻿using BepuWrapper.Entities.Behaviours;
-using BepuWrapper.patches;
+﻿using PhysicsLib.Entities.Behaviours;
+using PhysicsLib.patches;
 using System;
 using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.Api.CollisionSource
+namespace PhysicsLib.Api.CollisionSource
 {
     public class BepuDynamicCollisionSource : IBepuDynamicCollisionSource
     {

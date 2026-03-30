@@ -1,7 +1,7 @@
 ﻿using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
-namespace BepuWrapper.Api
+namespace PhysicsLib.Api
 {
     public struct DynamicCollisionBox
     {

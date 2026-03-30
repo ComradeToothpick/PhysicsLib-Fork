@@ -1,7 +1,7 @@
-﻿using BepuWrapper.Api;
-using BepuWrapper.Api.CollisionSource;
-using BepuWrapper.Entities.Behaviours;
-using BepuWrapper.patches;
+﻿using PhysicsLib.Api;
+using PhysicsLib.Api.CollisionSource;
+using PhysicsLib.Entities.Behaviours;
+using PhysicsLib.patches;
 using HarmonyLib;
 using System.Collections.Generic;
 using Vintagestory.API.Client;
@@ -10,9 +10,9 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
 
-namespace BepuWrapper
+namespace PhysicsLib
 {
-    public class BepuWrapperModSystem : ModSystem
+    public class PhysicsLibModSystem : ModSystem
     {
         private Harmony? harmony;
         private Dictionary<string, BuiltCompound> ComputedShapes = new Dictionary<string, BuiltCompound>();
@@ -32,12 +32,12 @@ namespace BepuWrapper
 
         public override void StartServerSide(ICoreServerAPI api)
         {
-            Mod.Logger.Notification("Hello from template mod server side: " + Lang.Get("bepuwrapper:hello"));
+            Mod.Logger.Notification("Hello from template mod server side: " + Lang.Get("physicslib:hello"));
         }
 
         public override void StartClientSide(ICoreClientAPI api)
         {
-            Mod.Logger.Notification("Hello from template mod client side: " + Lang.Get("bepuwrapper:hello"));
+            Mod.Logger.Notification("Hello from template mod client side: " + Lang.Get("physicslib:hello"));
         }
 
 

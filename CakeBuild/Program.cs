@@ -26,7 +26,7 @@ namespace CakeBuild
 
     public class BuildContext : FrostingContext
     {
-        public const string ProjectName = "BepuWrapper";
+        public const string ProjectName = "PhysicsLib";
         public string BuildConfiguration { get; }
         public string Version { get; }
         public string Name { get; }
