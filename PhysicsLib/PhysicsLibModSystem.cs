@@ -23,11 +23,11 @@ namespace PhysicsLib
         {
             harmony = new Harmony(Mod.Info.ModID);
             harmony.PatchAll();
-            var dynamicSource = new BepuDynamicCollisionSource(api);
+            var dynamicSource = new DynamicCollisionSource(api);
             CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = dynamicSource;
             CollisionTester_IsColliding_Patch.DynamicCollisionSource = dynamicSource;
             Mod.Logger.Notification("Hello from template mod: " + api.Side);
-            api.RegisterEntityBehaviorClass("bepu-physics", typeof(BepuPhysicsBehaviour));
+            api.RegisterEntityBehaviorClass("bepu-physics", typeof(DynamicPhysicsBehaviour));
         }
 
         public override void StartServerSide(ICoreServerAPI api)

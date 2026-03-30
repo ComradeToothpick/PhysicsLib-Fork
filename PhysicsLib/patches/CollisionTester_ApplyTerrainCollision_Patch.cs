@@ -14,7 +14,7 @@ namespace PhysicsLib.patches
     [HarmonyPatch(typeof(CollisionTester), nameof(CollisionTester.ApplyTerrainCollision))]
     public static class CollisionTester_ApplyTerrainCollision_Patch
     {
-        public static IBepuDynamicCollisionSource? DynamicCollisionSource;
+        public static IDynamicCollisionSource? DynamicCollisionSource;
 
         private class SupportState
         {
@@ -234,7 +234,7 @@ namespace PhysicsLib.patches
 
             if (TryGetStandingOnEntity(entity, out Entity previousSupportEntity) && previousSupportEntity != null)
             {
-                BepuPhysicsBehaviour supportPhysics = previousSupportEntity.GetBehavior<BepuPhysicsBehaviour>()!;
+                DynamicPhysicsBehaviour supportPhysics = previousSupportEntity.GetBehavior<DynamicPhysicsBehaviour>()!;
                 if (supportPhysics != null)
                 {
                     Vec3d carryPoint = GetCarryPoint(entityBox);

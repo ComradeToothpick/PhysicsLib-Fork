@@ -10,7 +10,7 @@ namespace PhysicsLib.patches
     [HarmonyPatch(typeof(CollisionTester), nameof(CollisionTester.IsColliding))]
     public static class CollisionTester_IsColliding_Patch
     {
-        public static IBepuDynamicCollisionSource? DynamicCollisionSource;
+        public static IDynamicCollisionSource? DynamicCollisionSource;
 
         [HarmonyPostfix]
         public static void Postfix(

@@ -10,7 +10,7 @@ using Vintagestory.API.MathTools;
 
 namespace PhysicsLib.Entities.Behaviours
 {
-    public class BepuPhysicsBehaviour : PhysicsBehaviorBase
+    public class DynamicPhysicsBehaviour : PhysicsBehaviorBase
     {
         private ICoreAPI? api;
         private PhysicsLibModSystem? physics;
@@ -27,7 +27,7 @@ namespace PhysicsLib.Entities.Behaviours
         private bool hasPreviousCarryPose;
         public Vec3f velocity = new Vec3f();
 
-        public BepuPhysicsBehaviour(Entity entity) : base(entity)
+        public DynamicPhysicsBehaviour(Entity entity) : base(entity)
         {
         }
 

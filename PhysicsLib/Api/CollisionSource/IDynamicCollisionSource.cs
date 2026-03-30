@@ -4,7 +4,7 @@ using Vintagestory.API.MathTools;
 
 namespace PhysicsLib.Api.CollisionSource
 {
-    public interface IBepuDynamicCollisionSource
+    public interface IDynamicCollisionSource
     {
         void CollectCollisionBoxes(Entity movingEntity, Cuboidd queryBox, List<DynamicCollisionBox> results);
     }

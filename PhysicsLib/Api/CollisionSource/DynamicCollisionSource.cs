@@ -1,5 +1,4 @@
 ﻿using PhysicsLib.Entities.Behaviours;
-using PhysicsLib.patches;
 using System;
 using System.Collections.Generic;
 using Vintagestory.API.Common;
@@ -8,11 +7,11 @@ using Vintagestory.API.MathTools;
 
 namespace PhysicsLib.Api.CollisionSource
 {
-    public class BepuDynamicCollisionSource : IBepuDynamicCollisionSource
+    public class DynamicCollisionSource : IDynamicCollisionSource
     {
         private ICoreAPI api;
 
-        public BepuDynamicCollisionSource(ICoreAPI api) { this.api = api; }
+        public DynamicCollisionSource(ICoreAPI api) { this.api = api; }
 
         public void CollectCollisionBoxes(
             Entity movingEntity,
@@ -51,7 +50,7 @@ namespace PhysicsLib.Api.CollisionSource
                 if (candidate == null || (movingEntity != null && candidate.EntityId == movingEntity.EntityId))
                     continue;
 
-                BepuPhysicsBehaviour bepuBehavior = candidate.GetBehavior<BepuPhysicsBehaviour>()!;
+                DynamicPhysicsBehaviour? bepuBehavior = candidate.GetBehavior<DynamicPhysicsBehaviour>();
                 if (bepuBehavior == null)
                     continue;
 

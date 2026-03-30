@@ -5,12 +5,12 @@ namespace PhysicsLib.Client
 {
     public class DebugRenderer : IRenderer
     {
-        private readonly BepuPhysicsBehaviour behavior;
+        private readonly DynamicPhysicsBehaviour behavior;
 
         public double RenderOrder => 1;
         public int RenderRange => 9999;
 
-        public DebugRenderer(BepuPhysicsBehaviour behavior)
+        public DebugRenderer(DynamicPhysicsBehaviour behavior)
         {
             this.behavior = behavior;
         }
