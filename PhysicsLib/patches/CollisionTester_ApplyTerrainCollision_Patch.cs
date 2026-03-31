@@ -23,14 +23,23 @@ namespace PhysicsLib.patches
         }
 
         private static readonly Dictionary<long, SupportState> SupportStates = new();
-        private const int SupportGraceTicks = 20;
+
+        // 20 is quite sticky. Reduce it.
+        private const int SupportGraceTicks = 6;
+
+        // Tighten these. Your old values were far too generous for jumping.
+        private const double SupportRetainHorizontalTolerance = 0.08;
+        private const double SupportRetainVerticalToleranceAbove = 0.08;
+        private const double SupportRetainVerticalToleranceBelow = 0.12;
+
+        private const double SupportSnapToleranceAbove = 0.08;
+        private const double SupportSnapToleranceBelow = 0.12;
 
         public static bool TryGetStandingOnEntity(Entity entity, out Entity standingOnEntity)
         {
             standingOnEntity = null!;
 
-            if (entity == null)
-                return false;
+            if (entity == null) return false;
 
             if (!SupportStates.TryGetValue(entity.EntityId, out SupportState? state) || state == null)
                 return false;
@@ -85,16 +94,13 @@ namespace PhysicsLib.patches
 
         public static void ClearStandingOnEntity(Entity entity)
         {
-            if (entity == null)
-                return;
-
+            if (entity == null) return;
             SupportStates.Remove(entity.EntityId);
         }
 
         private static void SetStandingOnEntity(Entity entity, Entity standingOnEntity)
         {
-            if (entity == null)
-                return;
+            if (entity == null) return;
 
             if (standingOnEntity == null)
             {
@@ -114,8 +120,7 @@ namespace PhysicsLib.patches
 
         private static void DecayStandingOnEntity(Entity entity)
         {
-            if (entity == null)
-                return;
+            if (entity == null) return;
 
             if (!SupportStates.TryGetValue(entity.EntityId, out SupportState? state) || state == null)
                 return;
@@ -136,10 +141,6 @@ namespace PhysicsLib.patches
             if (entity == null || supportEntity == null || dynamicBoxes == null || dynamicBoxes.Count == 0)
                 return false;
 
-            const double horizontalTolerance = 0.1;
-            const double verticalToleranceAbove = 0.35;
-            const double verticalToleranceBelow = 0.25;
-
             for (int i = 0; i < dynamicBoxes.Count; i++)
             {
                 DynamicCollisionBox box = dynamicBoxes[i];
@@ -151,27 +152,23 @@ namespace PhysicsLib.patches
                     continue;
 
                 bool overlapsHorizontally =
-                    entityBox.X2 > b.X1 - horizontalTolerance &&
-                    entityBox.X1 < b.X2 + horizontalTolerance &&
-                    entityBox.Z2 > b.Z1 - horizontalTolerance &&
-                    entityBox.Z1 < b.Z2 + horizontalTolerance;
+                    entityBox.X2 > b.X1 - SupportRetainHorizontalTolerance &&
+                    entityBox.X1 < b.X2 + SupportRetainHorizontalTolerance &&
+                    entityBox.Z2 > b.Z1 - SupportRetainHorizontalTolerance &&
+                    entityBox.Z1 < b.Z2 + SupportRetainHorizontalTolerance;
 
                 if (!overlapsHorizontally)
                     continue;
-
-                bool overlapsVertically =
-                    entityBox.Y2 > b.Y1 - verticalToleranceBelow &&
-                    entityBox.Y1 < b.Y2 + verticalToleranceAbove;
-
-                if (overlapsVertically)
-                    return true;
 
                 double feetY = entityBox.Y1;
                 double topY = b.Y2;
                 double verticalOffset = feetY - topY;
 
-                if (verticalOffset >= -verticalToleranceBelow && verticalOffset <= verticalToleranceAbove)
+                if (verticalOffset >= -SupportRetainVerticalToleranceBelow &&
+                    verticalOffset <= SupportRetainVerticalToleranceAbove)
+                {
                     return true;
+                }
             }
 
             return false;
@@ -184,6 +181,45 @@ namespace PhysicsLib.patches
                 entityBox.Y1,
                 (entityBox.Z1 + entityBox.Z2) * 0.5
             );
+        }
+
+        // Use yaw only. Full quaternion on movement is wrong for a deck/floor carrier.
+        private static Quaternion ExtractYawOnly(Quaternion q)
+        {
+            double sinyCosp = 2.0 * (q.W * q.Y + q.X * q.Z);
+            double cosyCosp = 1.0 - 2.0 * (q.Y * q.Y + q.Z * q.Z);
+            float yaw = (float)Math.Atan2(sinyCosp, cosyCosp);
+            return Quaternion.CreateFromAxisAngle(Vector3.UnitY, yaw);
+        }
+
+        private static bool ShouldStickToSupport(double feetY, double supportTopY, EntityPos entityPos, double motionY)
+        {
+            double verticalOffset = feetY - supportTopY;
+
+            // Do not stick while the entity is moving upward / jumping.
+            if (entityPos.Motion.Y > 0.001 || motionY > 0.001)
+                return false;
+
+            return verticalOffset >= -SupportSnapToleranceBelow &&
+                   verticalOffset <= SupportSnapToleranceAbove;
+        }
+
+        private static bool ShouldIgnoreHorizontalDynamicCollision(
+            DynamicCollisionBox dynamicBox,
+            Entity? resolvedSupportEntity,
+            Cuboidd entityBox)
+        {
+            if (resolvedSupportEntity == null)
+                return false;
+
+            if (dynamicBox.SourceEntity != resolvedSupportEntity)
+                return false;
+
+            if (!dynamicBox.CanSupport || dynamicBox.Box == null)
+                return false;
+
+            // Ignore the support floor in X/Z resolution when we're essentially standing on it.
+            return entityBox.Y1 >= dynamicBox.Box.Y2 - 0.05;
         }
 
         [HarmonyPrefix]
@@ -232,15 +268,17 @@ namespace PhysicsLib.patches
 
             entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
 
-            if (TryGetStandingOnEntity(entity, out Entity previousSupportEntity) && previousSupportEntity != null)
+            Entity previousSupportEntity = null!;
+            bool hadPreviousSupport = TryGetStandingOnEntity(entity, out previousSupportEntity) && previousSupportEntity != null;
+
+            if (hadPreviousSupport)
             {
                 DynamicPhysicsBehaviour supportPhysics = previousSupportEntity.GetBehavior<DynamicPhysicsBehaviour>()!;
                 if (supportPhysics != null)
                 {
                     Vec3d carryPoint = GetCarryPoint(entityBox);
-                    Vec3d carryDelta;
 
-                    if (supportPhysics.TryGetCarryDeltaForPoint(carryPoint, out carryDelta))
+                    if (supportPhysics.TryGetCarryDeltaForPoint(carryPoint, out Vec3d carryDelta))
                     {
                         pos.X += carryDelta.X;
                         pos.Y += carryDelta.Y;
@@ -249,15 +287,18 @@ namespace PhysicsLib.patches
                         entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
                     }
 
-                    if (supportPhysics.TryGetCarryRotationDelta(out Quaternion rotationDelta))
+                    // IMPORTANT: only apply yaw rotation to player movement.
+                    if (entity is EntityPlayer && supportPhysics.TryGetCarryRotationDelta(out Quaternion rotationDelta))
                     {
+                        Quaternion yawOnly = ExtractYawOnly(rotationDelta);
+
                         Vector3 horizontalMotion = new Vector3(
                             (float)entityPos.Motion.X,
                             0f,
                             (float)entityPos.Motion.Z
                         );
 
-                        horizontalMotion = Vector3.Transform(horizontalMotion, rotationDelta);
+                        horizontalMotion = Vector3.Transform(horizontalMotion, yawOnly);
 
                         entityPos.Motion.X = horizontalMotion.X;
                         entityPos.Motion.Z = horizontalMotion.Z;
@@ -299,7 +340,7 @@ namespace PhysicsLib.patches
             float dynamicQueryStepHeight = stepHeight;
             float dynamicQueryYExtra = yExtra;
 
-            if (TryGetStandingOnEntity(entity, out Entity querySupportEntity) && querySupportEntity != null)
+            if (hadPreviousSupport)
             {
                 dynamicQueryStepHeight = Math.Max(dynamicQueryStepHeight, 2f);
                 dynamicQueryYExtra = Math.Max(dynamicQueryYExtra, 2f);
@@ -316,17 +357,14 @@ namespace PhysicsLib.patches
                 dynamicQueryYExtra
             );
 
-            if (TryGetStandingOnEntity(entity, out Entity snapSupportEntity) && snapSupportEntity != null)
+            // Early snap only if descending / stationary vertically.
+            if (hadPreviousSupport)
             {
-                if (TryGetSupportTopY(snapSupportEntity, dynamicBoxes, entityBox, out double supportTopY))
+                if (TryGetSupportTopY(previousSupportEntity, dynamicBoxes, entityBox, out double supportTopY))
                 {
                     double feetY = entityBox.Y1;
-                    double snapToleranceAbove = 0.25;
-                    double snapToleranceBelow = 0.1;
 
-                    double verticalOffset = feetY - supportTopY;
-
-                    if (verticalOffset >= -snapToleranceBelow && verticalOffset <= snapToleranceAbove)
+                    if (ShouldStickToSupport(feetY, supportTopY, entityPos, motionY))
                     {
                         double snapDelta = supportTopY - feetY;
                         pos.Y += snapDelta;
@@ -335,6 +373,11 @@ namespace PhysicsLib.patches
                         if (entityPos.Motion.Y < 0.0)
                         {
                             entityPos.Motion.Y = 0.0;
+                        }
+
+                        if (motionY < 0.0)
+                        {
+                            motionY = 0.0;
                         }
                     }
                 }
@@ -419,6 +462,29 @@ namespace PhysicsLib.patches
 
             bool collidedHorizontally = false;
 
+            Entity resolvedSupportEntity = null!;
+
+            bool keepPreviousSupport =
+                !standingOnDynamicEntity &&
+                hadPreviousSupport &&
+                entityPos.Motion.Y <= 0.001 && // do not retain support while moving upward
+                IsEntityStillContainedBySupport(entity, previousSupportEntity, dynamicBoxes, entityBox);
+
+            if (standingOnDynamicEntity && supportEntity != null)
+            {
+                resolvedSupportEntity = supportEntity;
+                SetStandingOnEntity(entity, supportEntity);
+            }
+            else if (keepPreviousSupport)
+            {
+                resolvedSupportEntity = previousSupportEntity;
+                SetStandingOnEntity(entity, previousSupportEntity);
+            }
+            else
+            {
+                DecayStandingOnEntity(entity);
+            }
+
             if (horizontalIntersects)
             {
                 for (int i = 0; i < terrainBoxes.Length && i < terrainCount; i++)
@@ -443,6 +509,9 @@ namespace PhysicsLib.patches
 
                 for (int i = 0; i < dynamicBoxes.Count; i++)
                 {
+                    if (ShouldIgnoreHorizontalDynamicCollision(dynamicBoxes[i], resolvedSupportEntity, entityBox))
+                        continue;
+
                     EnumPushDirection dynamicDirection = EnumPushDirection.None;
                     double pushedX = dynamicBoxes[i].Box.pushOutX(entityBox, motionX, ref dynamicDirection);
 
@@ -477,6 +546,9 @@ namespace PhysicsLib.patches
 
                 for (int i = 0; i < dynamicBoxes.Count; i++)
                 {
+                    if (ShouldIgnoreHorizontalDynamicCollision(dynamicBoxes[i], resolvedSupportEntity, entityBox))
+                        continue;
+
                     EnumPushDirection dynamicDirection = EnumPushDirection.None;
                     double pushedZ = dynamicBoxes[i].Box.pushOutZ(entityBox, motionZ, ref dynamicDirection);
 
@@ -499,32 +571,11 @@ namespace PhysicsLib.patches
             motionY -= motionBiasY;
             motionZ -= motionBiasZ;
 
-            bool keepPreviousSupport =
-                !standingOnDynamicEntity &&
-                previousSupportEntity != null &&
-                IsEntityStillContainedBySupport(entity, previousSupportEntity, dynamicBoxes, entityBox);
-
-            Entity resolvedSupportEntity = null!;
-
-            if (standingOnDynamicEntity && supportEntity != null)
-            {
-                resolvedSupportEntity = supportEntity;
-                SetStandingOnEntity(entity, supportEntity);
-            }
-            else if (keepPreviousSupport)
-            {
-                resolvedSupportEntity = previousSupportEntity!;
-                SetStandingOnEntity(entity, previousSupportEntity!);
-            }
-            else
-            {
-                DecayStandingOnEntity(entity);
-            }
-
             double finalX = pos.X + motionX;
             double finalY = pos.Y + motionY;
             double finalZ = pos.Z + motionZ;
 
+            // Final clamp only when genuinely settling onto support.
             if (resolvedSupportEntity != null)
             {
                 Cuboidd finalEntityBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
@@ -546,21 +597,25 @@ namespace PhysicsLib.patches
                 if (TryGetSupportTopY(resolvedSupportEntity, finalDynamicBoxes, finalEntityBox, out double supportTopY))
                 {
                     double feetY = finalEntityBox.Y1;
-                    double clampDelta = supportTopY - feetY;
 
-                    finalY += clampDelta;
-
-                    if (entityPos.Motion.Y < 0.0)
+                    if (ShouldStickToSupport(feetY, supportTopY, entityPos, motionY))
                     {
-                        entityPos.Motion.Y = 0.0;
-                    }
+                        double clampDelta = supportTopY - feetY;
+                        finalY += clampDelta;
 
-                    if (motionY < 0.0)
-                    {
-                        motionY = 0.0;
-                    }
+                        if (entityPos.Motion.Y < 0.0)
+                        {
+                            entityPos.Motion.Y = 0.0;
+                        }
 
-                    entity.CollidedVertically = true;
+                        if (motionY < 0.0)
+                        {
+                            motionY = 0.0;
+                        }
+
+                        entity.CollidedVertically = true;
+                        entity.OnGround = true;
+                    }
                 }
             }
 
