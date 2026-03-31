@@ -1,6 +1,6 @@
-﻿using PhysicsLib.Api;
+﻿using HarmonyLib;
+using PhysicsLib.Api;
 using PhysicsLib.Api.CollisionSource;
-using HarmonyLib;
 using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -20,17 +20,13 @@ namespace PhysicsLib.patches
             bool alsoCheckTouch,
             ref bool __result)
         {
-            if (__result)
-                return;
-
-            if (DynamicCollisionSource == null)
+            if (__result || DynamicCollisionSource == null)
                 return;
 
             Cuboidd queryBox = entityBoxRel.ToDouble();
             queryBox.Translate(pos);
 
-            List<DynamicCollisionBox> dynamicBoxes =
-                new List<DynamicCollisionBox>();
+            List<DynamicCollisionBox> dynamicBoxes = new();
 
             DynamicCollisionSource.CollectCollisionBoxes(
                 null!,
