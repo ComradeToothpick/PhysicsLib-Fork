@@ -15,7 +15,7 @@
     "path": "/server/behaviors",
     "value": [
       {
-        "code": "bepu-physics",
+        "code": "dynamic-physics",
         "selectors": [
           "ORIGINT2/BEARBOAT/*"
         ]
@@ -28,7 +28,7 @@
     "path": "/client/behaviors",
     "value": [
       {
-        "code": "bepu-physics",
+        "code": "dynamic-physics",
         "selectors": [
           "ORIGINT2/BEARBOAT/*"
         ]
