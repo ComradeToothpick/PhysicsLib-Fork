@@ -43,7 +43,6 @@ namespace PhysicsLib.Entities.Behaviours
             if (entity.Api.Side == EnumAppSide.Client)
             {
                 capi = entity.Api as ICoreClientAPI;
-                // capi.Event.RegisterRenderer(new DebugRenderer(this), EnumRenderStage.AfterFinalComposition);
             }
 
             selectors = attributes["selectors"].AsArray<string>();
@@ -188,67 +187,38 @@ namespace PhysicsLib.Entities.Behaviours
             return true;
         }
 
-        public void DebugRender(ICoreClientAPI capi)
+        public bool TryGetSupportTopYUnderBox(Cuboidd entityBox, double horizontalPadding, out double supportTopY)
         {
-            if (manualChildBoxes.Count == 0) return;
-            if (!TryGetCollisionPose(out Vector3 bodyPos, out Quaternion bodyRot)) return;
+            supportTopY = 0.0;
 
-            RebuildWorldCollisionCacheIfNeeded(bodyPos, bodyRot);
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+                return false;
 
-            int color = ColorUtil.ToRgba(255, 255, 0, 0);
+            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyOrientation);
+
+            bool found = false;
 
             for (int i = 0; i < cachedWorldBoxes.Count; i++)
             {
                 Cuboidd b = cachedWorldBoxes[i].Box;
-                DrawAabb(capi, b, color);
-            }
-        }
 
-        private void DrawAabb(ICoreClientAPI capi, Cuboidd b, int color)
-        {
-            Vector3[] corners = new Vector3[8];
+                bool overlapsHorizontally =
+                    entityBox.X2 > b.X1 - horizontalPadding &&
+                    entityBox.X1 < b.X2 + horizontalPadding &&
+                    entityBox.Z2 > b.Z1 - horizontalPadding &&
+                    entityBox.Z1 < b.Z2 + horizontalPadding;
 
-            corners[0] = new Vector3((float)b.X1, (float)b.Y1, (float)b.Z1);
-            corners[1] = new Vector3((float)b.X2, (float)b.Y1, (float)b.Z1);
-            corners[2] = new Vector3((float)b.X2, (float)b.Y2, (float)b.Z1);
-            corners[3] = new Vector3((float)b.X1, (float)b.Y2, (float)b.Z1);
+                if (!overlapsHorizontally)
+                    continue;
 
-            corners[4] = new Vector3((float)b.X1, (float)b.Y1, (float)b.Z2);
-            corners[5] = new Vector3((float)b.X2, (float)b.Y1, (float)b.Z2);
-            corners[6] = new Vector3((float)b.X2, (float)b.Y2, (float)b.Z2);
-            corners[7] = new Vector3((float)b.X1, (float)b.Y2, (float)b.Z2);
-
-            BlockPos origin = entity.Pos.AsBlockPos;
-
-            for (int i = 0; i < 8; i++)
-            {
-                corners[i] -= new Vector3(origin.X, origin.Y, origin.Z);
+                if (!found || b.Y2 > supportTopY)
+                {
+                    supportTopY = b.Y2;
+                    found = true;
+                }
             }
 
-            Line(capi, origin, corners[0], corners[1], color);
-            Line(capi, origin, corners[1], corners[2], color);
-            Line(capi, origin, corners[2], corners[3], color);
-            Line(capi, origin, corners[3], corners[0], color);
-
-            Line(capi, origin, corners[4], corners[5], color);
-            Line(capi, origin, corners[5], corners[6], color);
-            Line(capi, origin, corners[6], corners[7], color);
-            Line(capi, origin, corners[7], corners[4], color);
-
-            Line(capi, origin, corners[0], corners[4], color);
-            Line(capi, origin, corners[1], corners[5], color);
-            Line(capi, origin, corners[2], corners[6], color);
-            Line(capi, origin, corners[3], corners[7], color);
-        }
-
-        private void Line(ICoreClientAPI capi, BlockPos origin, Vector3 a, Vector3 b, int color)
-        {
-            capi.Render.RenderLine(
-                origin,
-                a.X, a.Y, a.Z,
-                b.X, b.Y, b.Z,
-                color
-            );
+            return found;
         }
 
         private void RebuildWorldCollisionCacheIfNeeded(Vector3 bodyPosition, Quaternion bodyOrientation)
@@ -281,7 +251,7 @@ namespace PhysicsLib.Entities.Behaviours
 
                 cachedWorldBoxes.Add(new DynamicCollisionBox
                 {
-                    Box = worldAabb,
+                    Box = worldAabb.GrowBy(0.01, 0.01, 0.01),
                     SourceEntity = entity,
                     CanSupport = true
                 });

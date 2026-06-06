@@ -32,13 +32,14 @@ namespace PhysicsLib.patches
         private static readonly Dictionary<long, SupportState> SupportStates = new();
 
         private const double MotionBiasThreshold = 0.0001;
-
-        // support snap / retain
         private const double SupportSnapAbove = 0.08;
         private const double SupportSnapBelow = 0.18;
-
-        // only ignore X/Z against support boxes that are clearly floor-ish relative to feet
         private const double FloorIgnoreTopTolerance = 0.06;
+        private const double PreviousSupportRetainAbove = 0.12;
+        private const double PreviousSupportRetainBelow = 0.30;
+
+        // Critical seam fix.
+        private const double SupportHorizontalPadding = 0.03;
 
         [HarmonyPrefix]
         public static bool Prefix(
@@ -87,9 +88,8 @@ namespace PhysicsLib.patches
             if (entity == null) return null;
             if (!SupportStates.TryGetValue(entity.EntityId, out supportState) || supportState == null)
                 return null;
-            var supportEntity = entity.World.GetEntityById(supportState.SupportEntityId);
 
-            return supportEntity;
+            return entity.World.GetEntityById(supportState.SupportEntityId);
         }
 
         private static void ApplyTerrainAndDynamicCollision(
@@ -117,8 +117,6 @@ namespace PhysicsLib.patches
             Entity? previousSupportEntity = ResolveSupportEntity(entity, out SupportState? previousSupportState);
             DynamicPhysicsBehaviour? previousSupportPhysics = previousSupportEntity?.GetBehavior<DynamicPhysicsBehaviour>();
 
-            // Carry before collision resolution, but by frame delta only.
-            // This keeps you on the boat without turning edge rotation into insane speed.
             if (previousSupportEntity != null && previousSupportPhysics != null && previousSupportState != null)
             {
                 if (previousSupportPhysics.TryGetPointVelocityDelta(previousSupportState.LocalAnchorPoint, out Vec3d carryDelta))
@@ -176,7 +174,6 @@ namespace PhysicsLib.patches
             bool collidedHorizontally = false;
             EnumPushDirection direction = EnumPushDirection.None;
 
-            // Y first - vanilla style
             int terrainCount = tester.CollisionBoxList.Count;
             Cuboidd[] terrainBoxes = tester.CollisionBoxList.cuboids;
 
@@ -232,7 +229,6 @@ namespace PhysicsLib.patches
             entityBox.Translate(0.0, motionY, 0.0);
             entity.CollidedVertically = collidedVertically;
 
-            // Supplemental support snap for descending/stationary vertical motion
             if (entityPos.Motion.Y <= 0.001)
             {
                 SupportCandidate? nearbySupport = FindBestSupportBelowFeet(entityBox, dynamicBoxes);
@@ -396,6 +392,36 @@ namespace PhysicsLib.patches
                 )
             );
 
+            if (finalSupport == null && previousSupportPhysics != null && previousSupportEntity != null)
+            {
+                if (previousSupportPhysics.TryGetSupportTopYUnderBox(finalEntityBox, SupportHorizontalPadding, out double retainedTopY))
+                {
+                    double verticalOffset = finalEntityBox.Y1 - retainedTopY;
+
+                    if (verticalOffset >= -PreviousSupportRetainBelow &&
+                        verticalOffset <= PreviousSupportRetainAbove)
+                    {
+                        finalY -= verticalOffset;
+                        finalEntityBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
+
+                        finalSupport = new SupportCandidate
+                        {
+                            SupportEntity = previousSupportEntity,
+                            Box = new Cuboidd(),
+                            TopY = retainedTopY
+                        };
+
+                        if (entityPos.Motion.Y < 0.0)
+                        {
+                            entityPos.Motion.Y = 0.0;
+                        }
+
+                        entity.CollidedVertically = true;
+                        entity.OnGround = true;
+                    }
+                }
+            }
+
             if (finalSupport != null)
             {
                 DynamicPhysicsBehaviour? supportPhysics = finalSupport.SupportEntity.GetBehavior<DynamicPhysicsBehaviour>();
@@ -430,9 +456,6 @@ namespace PhysicsLib.patches
                 return false;
 
             Cuboidd b = dynamicBox.Box;
-
-            // Only ignore support boxes whose top is at or below the rider's feet.
-            // This preserves wall/blocking collisions inside the boat.
             return b.Y2 <= entityBox.Y1 + FloorIgnoreTopTolerance;
         }
 
@@ -459,10 +482,10 @@ namespace PhysicsLib.patches
                 Cuboidd b = dyn.Box;
 
                 bool overlapsHorizontally =
-                    entityBox.X2 > b.X1 &&
-                    entityBox.X1 < b.X2 &&
-                    entityBox.Z2 > b.Z1 &&
-                    entityBox.Z1 < b.Z2;
+                    entityBox.X2 > b.X1 - SupportHorizontalPadding &&
+                    entityBox.X1 < b.X2 + SupportHorizontalPadding &&
+                    entityBox.Z2 > b.Z1 - SupportHorizontalPadding &&
+                    entityBox.Z1 < b.Z2 + SupportHorizontalPadding;
 
                 if (!overlapsHorizontally)
                     continue;

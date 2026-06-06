@@ -15,7 +15,7 @@
     "path": "/server/behaviors",
     "value": [
       {
-        "code": "bepu-physics",
+        "code": "dynamic-physics",
         "selectors": [
           "ORIGINAirship/BARREL SEAT/origin barrel/*"
         ]
@@ -28,7 +28,7 @@
     "path": "/client/behaviors",
     "value": [
       {
-        "code": "bepu-physics",
+        "code": "dynamic-physics",
         "selectors": [
           "ORIGINAirship/BARREL SEAT/origin barrel/*"
         ]

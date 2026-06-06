@@ -27,7 +27,7 @@ namespace PhysicsLib
             CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = dynamicSource;
             CollisionTester_IsColliding_Patch.DynamicCollisionSource = dynamicSource;
             Mod.Logger.Notification("Hello from template mod: " + api.Side);
-            api.RegisterEntityBehaviorClass("bepu-physics", typeof(DynamicPhysicsBehaviour));
+            api.RegisterEntityBehaviorClass("dynamic-physics", typeof(DynamicPhysicsBehaviour));
         }
 
         public override void StartServerSide(ICoreServerAPI api)
