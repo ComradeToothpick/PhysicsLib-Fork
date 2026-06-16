@@ -2,12 +2,14 @@
   {
     "file": "vsairshipmod:entities/air/tier1entity",
     "op": "remove",
-    "path": "/server/behaviors/0"
+    "path": "/server/behaviors/0",
+    "dependsOn": [ { "modid": "vsairshipmod" } ]
   },
   {
     "file": "vsairshipmod:entities/air/tier1entity",
     "op": "remove",
-    "path": "/client/behaviors/0"
+    "path": "/client/behaviors/0",
+    "dependsOn": [ { "modid": "vsairshipmod" } ]
   },
   {
     "file": "vsairshipmod:entities/air/tier1entity",
@@ -20,7 +22,8 @@
           "ORIGINAirship/BARREL SEAT/origin barrel/*"
         ]
       }
-    ]
+    ],
+    "dependsOn": [ { "modid": "vsairshipmod" } ]
   },
   {
     "file": "vsairshipmod:entities/air/tier1entity",
@@ -33,6 +36,7 @@
           "ORIGINAirship/BARREL SEAT/origin barrel/*"
         ]
       }
-    ]
+    ],
+    "dependsOn": [ { "modid": "vsairshipmod" } ]
   }
 ]

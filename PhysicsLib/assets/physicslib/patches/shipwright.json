@@ -1,0 +1,40 @@
+[
+  {
+    "file": "shipwright:entities/nonliving/drakkar",
+    "op": "remove",
+    "path": "/server/behaviors/0",
+    "dependsOn": [ { "modid": "physicslib" } ]
+  },
+  {
+    "file": "shipwright:entities/nonliving/drakkar",
+    "op": "remove",
+    "path": "/client/behaviors/0",
+    "dependsOn": [ { "modid": "physicslib" } ]
+  },
+  {
+    "file": "shipwright:entities/nonliving/drakkar",
+    "op": "addmerge",
+    "dependsOn": [ { "modid": "physicslib" } ],
+    "path": "/server/behaviors/-",
+    "value": {
+      "code": "dynamic-physics",
+      "selectors": [
+        "ORIGIN/Collision/*"
+      ]
+    }
+
+  },
+  {
+    "file": "shipwright:entities/nonliving/drakkar",
+    "op": "addmerge",
+    "dependsOn": [ { "modid": "physicslib" } ],
+    "path": "/client/behaviors/-",
+    "value": {
+      "code": "dynamic-physics",
+      "selectors": [
+        "ORIGIN/Collision/*"
+      ]
+    }
+
+  }
+]

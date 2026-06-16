@@ -25,7 +25,7 @@ namespace PhysicsLib.patches
         private sealed class SupportCandidate
         {
             public Entity SupportEntity = null!;
-            public Cuboidd Box = null!;
+            public DynamicCollisionBox DynamicBox = null!;
             public double TopY;
         }
 
@@ -37,8 +37,6 @@ namespace PhysicsLib.patches
         private const double FloorIgnoreTopTolerance = 0.06;
         private const double PreviousSupportRetainAbove = 0.12;
         private const double PreviousSupportRetainBelow = 0.30;
-
-        // Critical seam fix.
         private const double SupportHorizontalPadding = 0.03;
 
         [HarmonyPrefix]
@@ -204,7 +202,7 @@ namespace PhysicsLib.patches
                 DynamicCollisionBox dynamicBox = dynamicBoxes[i];
                 EnumPushDirection dynamicDirection = EnumPushDirection.None;
 
-                double pushedY = dynamicBox.Box.pushOutY(entityBox, motionY, ref dynamicDirection);
+                double pushedY = PushOutYObbAabb(dynamicBox, entityBox, motionY, ref dynamicDirection);
 
                 if (dynamicDirection == EnumPushDirection.None)
                     continue;
@@ -214,13 +212,15 @@ namespace PhysicsLib.patches
 
                 if (dynamicDirection == EnumPushDirection.Negative && dynamicBox.CanSupport)
                 {
-                    if (standingSupport == null || dynamicBox.Box.Y2 > standingSupport.TopY)
+                    double contactTopY = entityBox.Y1 + pushedY;
+
+                    if (standingSupport == null || contactTopY > standingSupport.TopY)
                     {
                         standingSupport = new SupportCandidate
                         {
                             SupportEntity = dynamicBox.SourceEntity,
-                            Box = dynamicBox.Box,
-                            TopY = dynamicBox.Box.Y2
+                            DynamicBox = dynamicBox,
+                            TopY = contactTopY
                         };
                     }
                 }
@@ -270,7 +270,7 @@ namespace PhysicsLib.patches
             {
                 for (int i = 0; i < dynamicBoxes.Count; i++)
                 {
-                    if (dynamicBoxes[i].Box.Intersects(entityBox))
+                    if (IntersectsObbAabb(dynamicBoxes[i], entityBox))
                     {
                         horizontalIntersects = true;
                         break;
@@ -312,7 +312,7 @@ namespace PhysicsLib.patches
                         continue;
 
                     EnumPushDirection dynamicDirection = EnumPushDirection.None;
-                    double pushedX = dynamicBox.Box.pushOutX(entityBox, motionX, ref dynamicDirection);
+                    double pushedX = PushOutXObbAabb(dynamicBox, entityBox, motionX, ref dynamicDirection);
 
                     if (dynamicDirection != EnumPushDirection.None)
                     {
@@ -351,7 +351,7 @@ namespace PhysicsLib.patches
                         continue;
 
                     EnumPushDirection dynamicDirection = EnumPushDirection.None;
-                    double pushedZ = dynamicBox.Box.pushOutZ(entityBox, motionZ, ref dynamicDirection);
+                    double pushedZ = PushOutZObbAabb(dynamicBox, entityBox, motionZ, ref dynamicDirection);
 
                     if (dynamicDirection != EnumPushDirection.None)
                     {
@@ -407,7 +407,7 @@ namespace PhysicsLib.patches
                         finalSupport = new SupportCandidate
                         {
                             SupportEntity = previousSupportEntity,
-                            Box = new Cuboidd(),
+                            DynamicBox = null!,
                             TopY = retainedTopY
                         };
 
@@ -455,8 +455,8 @@ namespace PhysicsLib.patches
             if (dynamicBox.SourceEntity != resolvedSupportEntity)
                 return false;
 
-            Cuboidd b = dynamicBox.Box;
-            return b.Y2 <= entityBox.Y1 + FloorIgnoreTopTolerance;
+            double supportTopY = FindSupportTopByVerticalSweep(entityBox, dynamicBox);
+            return supportTopY <= entityBox.Y1 + FloorIgnoreTopTolerance;
         }
 
         private static Vec3d GetFeetCenter(Cuboidd entityBox)
@@ -471,7 +471,6 @@ namespace PhysicsLib.patches
         private static SupportCandidate? FindBestSupportBelowFeet(Cuboidd entityBox, List<DynamicCollisionBox> dynamicBoxes)
         {
             SupportCandidate? best = null;
-            double feetY = entityBox.Y1;
 
             for (int i = 0; i < dynamicBoxes.Count; i++)
             {
@@ -479,33 +478,37 @@ namespace PhysicsLib.patches
                 if (!dyn.CanSupport)
                     continue;
 
-                Cuboidd b = dyn.Box;
+                double supportTopY = FindSupportTopByVerticalSweep(entityBox, dyn);
+                double delta = entityBox.Y1 - supportTopY;
 
-                bool overlapsHorizontally =
-                    entityBox.X2 > b.X1 - SupportHorizontalPadding &&
-                    entityBox.X1 < b.X2 + SupportHorizontalPadding &&
-                    entityBox.Z2 > b.Z1 - SupportHorizontalPadding &&
-                    entityBox.Z1 < b.Z2 + SupportHorizontalPadding;
-
-                if (!overlapsHorizontally)
-                    continue;
-
-                double delta = feetY - b.Y2;
                 if (delta < -SupportSnapBelow || delta > SupportSnapAbove)
                     continue;
 
-                if (best == null || b.Y2 > best.TopY)
+                if (best == null || supportTopY > best.TopY)
                 {
                     best = new SupportCandidate
                     {
                         SupportEntity = dyn.SourceEntity,
-                        Box = b,
-                        TopY = b.Y2
+                        DynamicBox = dyn,
+                        TopY = supportTopY
                     };
                 }
             }
 
             return best;
+        }
+
+        private static double FindSupportTopByVerticalSweep(Cuboidd entityBox, DynamicCollisionBox dynamicBox)
+        {
+            double downMotion = -SupportSnapBelow;
+            EnumPushDirection direction = EnumPushDirection.None;
+
+            double pushedY = PushOutYObbAabb(dynamicBox, entityBox, downMotion, ref direction);
+
+            if (direction == EnumPushDirection.None)
+                return double.NegativeInfinity;
+
+            return entityBox.Y1 + pushedY;
         }
 
         private static void GenerateTerrainCollisionBoxList(
@@ -587,6 +590,187 @@ namespace PhysicsLib.patches
             );
 
             return results;
+        }
+
+        private static Cuboidd OffsetEntityBox(Cuboidd box, double x, double y, double z)
+        {
+            return new Cuboidd(
+                box.X1 + x,
+                box.Y1 + y,
+                box.Z1 + z,
+                box.X2 + x,
+                box.Y2 + y,
+                box.Z2 + z
+            );
+        }
+
+        private static bool IntersectsObbAabb(DynamicCollisionBox obb, Cuboidd aabb)
+        {
+            Vector3 aabbCenter = new Vector3(
+                (float)((aabb.X1 + aabb.X2) * 0.5),
+                (float)((aabb.Y1 + aabb.Y2) * 0.5),
+                (float)((aabb.Z1 + aabb.Z2) * 0.5)
+            );
+
+            Vector3 aabbHalf = new Vector3(
+                (float)((aabb.X2 - aabb.X1) * 0.5),
+                (float)((aabb.Y2 - aabb.Y1) * 0.5),
+                (float)((aabb.Z2 - aabb.Z1) * 0.5)
+            );
+
+            Vector3[] a = new Vector3[3];
+            a[0] = Vector3.Normalize(Vector3.Transform(Vector3.UnitX, obb.Orientation));
+            a[1] = Vector3.Normalize(Vector3.Transform(Vector3.UnitY, obb.Orientation));
+            a[2] = Vector3.Normalize(Vector3.Transform(Vector3.UnitZ, obb.Orientation));
+
+            Vector3[] b = new Vector3[3];
+            b[0] = Vector3.UnitX;
+            b[1] = Vector3.UnitY;
+            b[2] = Vector3.UnitZ;
+
+            float[] ea = { obb.HalfExtents.X, obb.HalfExtents.Y, obb.HalfExtents.Z };
+            float[] eb = { aabbHalf.X, aabbHalf.Y, aabbHalf.Z };
+
+            float[,] r = new float[3, 3];
+            float[,] absR = new float[3, 3];
+
+            const float epsilon = 1e-6f;
+
+            for (int i = 0; i < 3; i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    r[i, j] = Vector3.Dot(a[i], b[j]);
+                    absR[i, j] = MathF.Abs(r[i, j]) + epsilon;
+                }
+            }
+
+            Vector3 tWorld = aabbCenter - obb.Center;
+
+            float[] t =
+            {
+                Vector3.Dot(tWorld, a[0]),
+                Vector3.Dot(tWorld, a[1]),
+                Vector3.Dot(tWorld, a[2])
+            };
+
+            for (int i = 0; i < 3; i++)
+            {
+                float ra = ea[i];
+                float rb = eb[0] * absR[i, 0] + eb[1] * absR[i, 1] + eb[2] * absR[i, 2];
+
+                if (MathF.Abs(t[i]) > ra + rb)
+                    return false;
+            }
+
+            for (int j = 0; j < 3; j++)
+            {
+                float ra = ea[0] * absR[0, j] + ea[1] * absR[1, j] + ea[2] * absR[2, j];
+                float rb = eb[j];
+
+                float projectedT = MathF.Abs(
+                    t[0] * r[0, j] +
+                    t[1] * r[1, j] +
+                    t[2] * r[2, j]
+                );
+
+                if (projectedT > ra + rb)
+                    return false;
+            }
+
+            for (int i = 0; i < 3; i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    float ra =
+                        ea[(i + 1) % 3] * absR[(i + 2) % 3, j] +
+                        ea[(i + 2) % 3] * absR[(i + 1) % 3, j];
+
+                    float rb =
+                        eb[(j + 1) % 3] * absR[i, (j + 2) % 3] +
+                        eb[(j + 2) % 3] * absR[i, (j + 1) % 3];
+
+                    float projectedT = MathF.Abs(
+                        t[(i + 2) % 3] * r[(i + 1) % 3, j] -
+                        t[(i + 1) % 3] * r[(i + 2) % 3, j]
+                    );
+
+                    if (projectedT > ra + rb)
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static double PushOutAxisObbAabb(
+            DynamicCollisionBox obb,
+            Cuboidd entityBox,
+            double motion,
+            int axis,
+            ref EnumPushDirection direction)
+        {
+            direction = EnumPushDirection.None;
+
+            if (Math.Abs(motion) <= 1e-12)
+                return motion;
+
+            Cuboidd movedBox = axis switch
+            {
+                0 => OffsetEntityBox(entityBox, motion, 0.0, 0.0),
+                1 => OffsetEntityBox(entityBox, 0.0, motion, 0.0),
+                2 => OffsetEntityBox(entityBox, 0.0, 0.0, motion),
+                _ => entityBox
+            };
+
+            if (!IntersectsObbAabb(obb, movedBox))
+                return motion;
+
+            double safe = 0.0;
+            double blocked = motion;
+
+            for (int i = 0; i < 24; i++)
+            {
+                double mid = (safe + blocked) * 0.5;
+
+                Cuboidd testBox = axis switch
+                {
+                    0 => OffsetEntityBox(entityBox, mid, 0.0, 0.0),
+                    1 => OffsetEntityBox(entityBox, 0.0, mid, 0.0),
+                    2 => OffsetEntityBox(entityBox, 0.0, 0.0, mid),
+                    _ => entityBox
+                };
+
+                if (IntersectsObbAabb(obb, testBox))
+                {
+                    blocked = mid;
+                }
+                else
+                {
+                    safe = mid;
+                }
+            }
+
+            direction = motion > 0.0
+                ? EnumPushDirection.Positive
+                : EnumPushDirection.Negative;
+
+            return safe;
+        }
+
+        private static double PushOutXObbAabb(DynamicCollisionBox obb, Cuboidd entityBox, double motionX, ref EnumPushDirection direction)
+        {
+            return PushOutAxisObbAabb(obb, entityBox, motionX, 0, ref direction);
+        }
+
+        private static double PushOutYObbAabb(DynamicCollisionBox obb, Cuboidd entityBox, double motionY, ref EnumPushDirection direction)
+        {
+            return PushOutAxisObbAabb(obb, entityBox, motionY, 1, ref direction);
+        }
+
+        private static double PushOutZObbAabb(DynamicCollisionBox obb, Cuboidd entityBox, double motionZ, ref EnumPushDirection direction)
+        {
+            return PushOutAxisObbAabb(obb, entityBox, motionZ, 2, ref direction);
         }
     }
 }
