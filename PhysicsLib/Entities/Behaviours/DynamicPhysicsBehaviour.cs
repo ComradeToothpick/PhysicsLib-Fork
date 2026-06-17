@@ -348,48 +348,74 @@ namespace PhysicsLib.Entities.Behaviours
 
         private static float DegreesToRadians(float degrees) => degrees * (MathF.PI / 180f);
 
-        private static Matrix4x4 CreateVsElementLocalMatrix(ShapeElement elem)
+        private static bool ElementHasRealBox(ShapeElement elem)
         {
-            float fx = elem.From != null ? (float)elem.From[0] / 16f : 0f;
-            float fy = elem.From != null ? (float)elem.From[1] / 16f : 0f;
-            float fz = elem.From != null ? (float)elem.From[2] / 16f : 0f;
+            if (elem.From == null || elem.To == null)
+                return false;
 
+            return MathF.Abs((float)elem.To[0] - (float)elem.From[0]) > 1e-5f &&
+                   MathF.Abs((float)elem.To[1] - (float)elem.From[1]) > 1e-5f &&
+                   MathF.Abs((float)elem.To[2] - (float)elem.From[2]) > 1e-5f;
+        }
+
+        /// <summary>
+        /// Builds the local-to-parent matrix for a shape element.
+        ///
+        /// VS shape element rotations interact with System.Numerics row-vector matrix
+        /// convention in a way that depends on the handedness of the parent coordinate frame.
+        /// When an ancestor element has flipped the X axis (e.g. via rotY=180), the parent
+        /// frame's X axis points in the negative direction (parentXSign &lt; 0). In that mirrored
+        /// frame the correct rotation composition order is Rz * Ry * Rx. In a normal frame
+        /// (parentXSign &gt; 0, even number of Y-180 flips in the ancestor chain) it is Rx * Ry * Rz.
+        ///
+        /// Without this distinction, elements that carry their own rotY=180 to mirror themselves
+        /// under an already-flipped ancestor end up with both Y-flips cancelling, producing the
+        /// wrong orientation in world space (the rotation goes the wrong direction).
+        ///
+        /// parentXSign: M11 of the parent world matrix (row 0, col 0 = X component of the
+        ///   parent frame's X axis). Negative = mirrored frame, positive = normal frame.
+        ///
+        /// Empty parents (from == to in any dimension) contribute no box-placement offset:
+        /// their From is substituted with RotationOrigin so T(From-Origin) = identity.
+        /// </summary>
+        private static Matrix4x4 CreateVsElementLocalMatrix(ShapeElement elem, float parentXSign)
+        {
             float ox = elem.RotationOrigin != null ? (float)elem.RotationOrigin[0] / 16f : 0f;
             float oy = elem.RotationOrigin != null ? (float)elem.RotationOrigin[1] / 16f : 0f;
             float oz = elem.RotationOrigin != null ? (float)elem.RotationOrigin[2] / 16f : 0f;
+
+            float fx, fy, fz;
+            if (ElementHasRealBox(elem))
+            {
+                fx = (float)elem.From![0] / 16f;
+                fy = (float)elem.From![1] / 16f;
+                fz = (float)elem.From![2] / 16f;
+            }
+            else
+            {
+                // Pivot-only element: From == rotationOrigin so T(From-Origin) = identity.
+                fx = ox; fy = oy; fz = oz;
+            }
 
             float sx = elem.ScaleX == 0.0 ? 1f : (float)elem.ScaleX;
             float sy = elem.ScaleY == 0.0 ? 1f : (float)elem.ScaleY;
             float sz = elem.ScaleZ == 0.0 ? 1f : (float)elem.ScaleZ;
 
-            Matrix4x4 translateFromMinusOrigin = Matrix4x4.CreateTranslation(
-                fx - ox,
-                fy - oy,
-                fz - oz
-            );
-
+            Matrix4x4 translateFromMinusOrigin = Matrix4x4.CreateTranslation(fx - ox, fy - oy, fz - oz);
             Matrix4x4 scale = Matrix4x4.CreateScale(sx, sy, sz);
-
-            Matrix4x4 rotateX = elem.RotationX != 0.0
-                ? Matrix4x4.CreateRotationX(DegreesToRadians((float)elem.RotationX))
-                : Matrix4x4.Identity;
-
-            Matrix4x4 rotateY = elem.RotationY != 0.0
-                ? Matrix4x4.CreateRotationY(DegreesToRadians((float)elem.RotationY))
-                : Matrix4x4.Identity;
-
-            Matrix4x4 rotateZ = elem.RotationZ != 0.0
-                ? Matrix4x4.CreateRotationZ(DegreesToRadians((float)elem.RotationZ))
-                : Matrix4x4.Identity;
-
+            Matrix4x4 rotateX = elem.RotationX != 0.0 ? Matrix4x4.CreateRotationX(DegreesToRadians((float)elem.RotationX)) : Matrix4x4.Identity;
+            Matrix4x4 rotateY = elem.RotationY != 0.0 ? Matrix4x4.CreateRotationY(DegreesToRadians((float)elem.RotationY)) : Matrix4x4.Identity;
+            Matrix4x4 rotateZ = elem.RotationZ != 0.0 ? Matrix4x4.CreateRotationZ(DegreesToRadians((float)elem.RotationZ)) : Matrix4x4.Identity;
             Matrix4x4 translateOrigin = Matrix4x4.CreateTranslation(ox, oy, oz);
 
-            return translateFromMinusOrigin
-                * scale
-                * rotateX
-                * rotateY
-                * rotateZ
-                * translateOrigin;
+            // In a mirrored parent frame (parentXSign < 0, i.e. an odd number of Y-180
+            // rotations in the ancestor chain), the extrinsic rotation order is Rz * Ry * Rx.
+            // In a normal frame it is Rx * Ry * Rz.
+            Matrix4x4 rotations = parentXSign < 0f
+                ? rotateZ * rotateY * rotateX
+                : rotateX * rotateY * rotateZ;
+
+            return translateFromMinusOrigin * scale * rotations * translateOrigin;
         }
 
         private BuiltCompound BuildCompoundFromShape(Shape shape)
@@ -444,17 +470,14 @@ namespace PhysicsLib.Entities.Behaviours
         {
             bool selected = parentSelected || MatchesAnySelector(path);
 
-            Matrix4x4 local = CreateVsElementLocalMatrix(elem);
+            // The sign of the parent world X-axis (row 0, col 0) tells us whether we
+            // are in a mirrored coordinate frame (negative = odd number of Y-180 flips).
+            float parentXSign = parentWorld.M11;  // M11 = row 0, col 0
+
+            Matrix4x4 local = CreateVsElementLocalMatrix(elem, parentXSign);
             Matrix4x4 world = local * parentWorld;
 
-            bool hasRealBox =
-                elem.From != null &&
-                elem.To != null &&
-                MathF.Abs((float)elem.To[0] - (float)elem.From[0]) > 1e-5f &&
-                MathF.Abs((float)elem.To[1] - (float)elem.From[1]) > 1e-5f &&
-                MathF.Abs((float)elem.To[2] - (float)elem.From[2]) > 1e-5f;
-
-            if (selected && hasRealBox)
+            if (selected && ElementHasRealBox(elem))
             {
                 float fx = (float)elem.From![0] / 16f;
                 float fy = (float)elem.From![1] / 16f;
