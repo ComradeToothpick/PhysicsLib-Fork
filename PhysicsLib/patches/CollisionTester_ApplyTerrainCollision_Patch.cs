@@ -16,6 +16,7 @@ namespace PhysicsLib.patches
     {
         public static IDynamicCollisionSource? DynamicCollisionSource;
 
+        // ── support tracking ──────────────────────────────────────────────────────
         private sealed class SupportState
         {
             public long SupportEntityId;
@@ -31,23 +32,32 @@ namespace PhysicsLib.patches
 
         private static readonly Dictionary<long, SupportState> SupportStates = new();
 
+        // ── tuning constants ──────────────────────────────────────────────────────
+
+        // Small directional bias so the entity is always nudging away from surfaces
+        // rather than sitting exactly flush (prevents jitter on the sweep boundary).
         private const double MotionBiasThreshold = 0.0001;
 
-        private const double SupportSnapAbove = 0.025;
-        private const double SupportSnapBelow = 0.09;
+        // How far above/below the surface top the feet may be and still be considered
+        // "standing on" a dynamic collider.  Above = feet slightly in the air (step up,
+        // bobbing boat).  Below = feet barely inside the surface (resting contact).
+        private const double SupportProbeAbove = 0.05;   // scan this far above current feet
+        private const double SupportProbeBelow = 0.12;   // scan this far below current feet
 
-        // Tightened: only skip horizontal collision when essentially flush with the floor surface
-        private const double FloorIgnoreTopTolerance = 0.005;
-        private const double SupportHorizontalPadding = 0.015;
-        private const double SupportFootInset = 0.025;
+        // Surface must face at least this far upward to be a floor candidate.
         private const double MinSupportUpY = 0.65;
 
-        private const double SweepSkin = 0.00001;
+        // Foot-sample inset so corner samples stay inside a narrow deck plank.
+        private const double SupportFootInset = 0.025;
 
-        // Minimum half-extent enforced on thin dynamic colliders to prevent tunneling.
-        // Masts and other thin geometry can be narrower than one tick of player motion,
-        // causing the AABB to start the next frame already overlapping.
-        private const float MinDynamicColliderHalfExtent = 0.05f;
+        // Extra XZ padding when checking whether foot samples are over a collider.
+        private const double SupportHorizontalPadding = 0.015;
+
+        // A tiny gap left between the entity and surfaces after a sweep so we never
+        // land exactly flush (avoids re-triggering the sweep the next frame).
+        private const double SweepSkin = 0.001;
+
+        // ── harmony entry point ───────────────────────────────────────────────────
 
         [HarmonyPrefix]
         public static bool Prefix(
@@ -60,17 +70,12 @@ namespace PhysicsLib.patches
             float yExtra = 1f)
         {
             ApplyTerrainAndDynamicCollision(
-                __instance,
-                entity,
-                entityPos,
-                dtFactor,
-                ref newPosition,
-                stepHeight,
-                yExtra
-            );
-
+                __instance, entity, entityPos, dtFactor,
+                ref newPosition, stepHeight, yExtra);
             return false;
         }
+
+        // ── public support helpers ────────────────────────────────────────────────
 
         public static void ClearStandingOnEntity(Entity entity)
         {
@@ -78,10 +83,11 @@ namespace PhysicsLib.patches
             SupportStates.Remove(entity.EntityId);
         }
 
+        // ── private support state ─────────────────────────────────────────────────
+
         private static void SetStandingOnEntity(Entity entity, Entity supportEntity, Vector3 localAnchorPoint)
         {
             if (entity == null || supportEntity == null) return;
-
             SupportStates[entity.EntityId] = new SupportState
             {
                 SupportEntityId = supportEntity.EntityId,
@@ -97,6 +103,8 @@ namespace PhysicsLib.patches
                 return null;
             return entity.World.GetEntityById(supportState.SupportEntityId);
         }
+
+        // ── main collision routine ────────────────────────────────────────────────
 
         private static void ApplyTerrainAndDynamicCollision(
             CollisionTester tester,
@@ -120,266 +128,240 @@ namespace PhysicsLib.patches
 
             entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
 
-            // --- Carry delta: collect it but apply only to final position, not to the sweep start ---
-            // This prevents the one-frame lag where collision is resolved against stale terrain positions.
-            Entity? previousSupportEntity = ResolveSupportEntity(entity, out SupportState? previousSupportState);
-            DynamicPhysicsBehaviour? previousSupportPhysics = previousSupportEntity?.GetBehavior<DynamicPhysicsBehaviour>();
+            // ── carry delta from standing on a moving entity ──────────────────────
+            // We apply the support platform's movement to this frame's motion so the
+            // player moves with the boat without a one-frame lag.
+            Entity? prevSupport = ResolveSupportEntity(entity, out SupportState? prevSupportState);
+            DynamicPhysicsBehaviour? prevSupportPhysics = prevSupport?.GetBehavior<DynamicPhysicsBehaviour>();
 
-            Vec3d carryDelta = new Vec3d(0, 0, 0);
-            if (previousSupportEntity != null && previousSupportPhysics != null && previousSupportState != null)
-            {
-                if (previousSupportPhysics.TryGetPointVelocityDelta(previousSupportState.LocalAnchorPoint, out Vec3d delta))
-                {
-                    carryDelta = delta;
-                }
-            }
+            Vec3d carryDelta = Vec3d.Zero;
+            if (prevSupport != null && prevSupportPhysics != null && prevSupportState != null)
+                prevSupportPhysics.TryGetPointVelocityDelta(prevSupportState.LocalAnchorPoint, out carryDelta);
 
             double motionX = entityPos.Motion.X * dtFactor + carryDelta.X;
             double motionY = entityPos.Motion.Y * dtFactor + carryDelta.Y;
             double motionZ = entityPos.Motion.Z * dtFactor + carryDelta.Z;
 
-            double motionBiasX = 0.0;
-            double motionBiasY = 0.0;
-            double motionBiasZ = 0.0;
+            // Small bias so we never sit exactly on a sweep boundary.
+            double biasX = motionX > MotionBiasThreshold ? MotionBiasThreshold :
+                           motionX < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
+            double biasY = motionY > MotionBiasThreshold ? MotionBiasThreshold :
+                           motionY < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
+            double biasZ = motionZ > MotionBiasThreshold ? MotionBiasThreshold :
+                           motionZ < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
 
-            if (motionX > MotionBiasThreshold) motionBiasX = MotionBiasThreshold;
-            if (motionX < -MotionBiasThreshold) motionBiasX = -MotionBiasThreshold;
-            if (motionY > MotionBiasThreshold) motionBiasY = MotionBiasThreshold;
-            if (motionY < -MotionBiasThreshold) motionBiasY = -MotionBiasThreshold;
-            if (motionZ > MotionBiasThreshold) motionBiasZ = MotionBiasThreshold;
-            if (motionZ < -MotionBiasThreshold) motionBiasZ = -MotionBiasThreshold;
+            motionX += biasX;
+            motionY += biasY;
+            motionZ += biasZ;
 
-            motionX += motionBiasX;
-            motionY += motionBiasY;
-            motionZ += motionBiasZ;
-
+            // ── collect collision geometry ────────────────────────────────────────
             GenerateTerrainCollisionBoxList(
-                tester,
-                world.BlockAccessor,
-                motionX,
-                motionY,
-                motionZ,
-                stepHeight,
-                yExtra,
-                entityPos.Dimension
-            );
+                tester, world.BlockAccessor,
+                motionX, motionY, motionZ,
+                stepHeight, yExtra, entityPos.Dimension);
 
-            List<DynamicCollisionBox> dynamicBoxes = CollectDynamicCollisionBoxes(
-                entity,
-                entityPos.Dimension,
-                entityBox,
-                motionX,
-                motionY,
-                motionZ,
-                stepHeight,
-                yExtra
-            );
-
-            bool collidedVertically = false;
-            bool collidedHorizontally = false;
+            List<DynamicCollisionBox> dynBoxes = CollectDynamicCollisionBoxes(
+                entity, entityPos.Dimension, entityBox,
+                motionX, motionY, motionZ, stepHeight, yExtra);
 
             int terrainCount = tester.CollisionBoxList.Count;
             Cuboidd[] terrainBoxes = tester.CollisionBoxList.cuboids;
 
-            // --- Y pass ---
-            for (int i = 0; i < terrainBoxes.Length && i < terrainCount; i++)
+            bool collidedV = false;
+            bool collidedH = false;
+
+            // ════════════════════════════════════════════════════════════════════════
+            // Y PASS — resolve vertical motion against terrain then dynamic colliders
+            // ════════════════════════════════════════════════════════════════════════
+
+            for (int i = 0; i < terrainCount && i < terrainBoxes.Length; i++)
             {
-                EnumPushDirection direction = EnumPushDirection.None;
-                motionY = terrainBoxes[i].pushOutY(entityBox, motionY, ref direction);
+                EnumPushDirection dir = EnumPushDirection.None;
+                motionY = terrainBoxes[i].pushOutY(entityBox, motionY, ref dir);
+                if (dir == EnumPushDirection.None) continue;
 
-                if (direction != EnumPushDirection.None)
-                {
-                    collidedVertically = true;
-                    collBlockPos.Set(tester.CollisionBoxList.positions[i]);
-
-                    tester.CollisionBoxList.blocks[i].OnEntityCollide(
-                        world, entity, collBlockPos,
-                        direction == EnumPushDirection.Negative ? BlockFacing.UP : BlockFacing.DOWN,
-                        tester.tmpPosDelta.Set(motionX, motionY, motionZ),
-                        !entity.CollidedVertically
-                    );
-                }
+                collidedV = true;
+                collBlockPos.Set(tester.CollisionBoxList.positions[i]);
+                tester.CollisionBoxList.blocks[i].OnEntityCollide(
+                    world, entity, collBlockPos,
+                    dir == EnumPushDirection.Negative ? BlockFacing.UP : BlockFacing.DOWN,
+                    tester.tmpPosDelta.Set(motionX, motionY, motionZ),
+                    !entity.CollidedVertically);
             }
 
-            SupportCandidate? standingSupport = null;
-
-            for (int i = 0; i < dynamicBoxes.Count; i++)
+            for (int i = 0; i < dynBoxes.Count; i++)
             {
-                DynamicCollisionBox dynamicBox = dynamicBoxes[i];
-
-                EnumPushDirection dynamicDirection = EnumPushDirection.None;
-                double pushedY = PushOutYObbAabb(dynamicBox, entityBox, motionY, ref dynamicDirection);
-
-                if (dynamicDirection == EnumPushDirection.None)
-                    continue;
-
-                motionY = pushedY;
-                collidedVertically = true;
-
-                if (dynamicDirection == EnumPushDirection.Negative &&
-                    dynamicBox.CanSupport &&
-                    dynamicBox.SourceEntity != null)
-                {
-                    Cuboidd movedYBox = OffsetEntityBox(entityBox, 0.0, pushedY, 0.0);
-
-                    if (TryGetSupportTopUnderFeet(movedYBox, dynamicBox, out double supportTopY))
-                    {
-                        double feetDelta = movedYBox.Y1 - supportTopY;
-
-                        if (feetDelta >= -SupportSnapAbove && feetDelta <= SupportSnapBelow)
-                        {
-                            if (standingSupport == null || supportTopY > standingSupport.TopY)
-                            {
-                                standingSupport = new SupportCandidate
-                                {
-                                    SupportEntity = dynamicBox.SourceEntity,
-                                    DynamicBox = dynamicBox,
-                                    TopY = supportTopY
-                                };
-                            }
-                        }
-                    }
-                }
+                EnumPushDirection dir = EnumPushDirection.None;
+                double swept = SweepAxisObbAabb(dynBoxes[i], entityBox, motionY, 1, ref dir);
+                if (dir == EnumPushDirection.None) continue;
+                motionY = swept;
+                collidedV = true;
             }
 
-            // Advance entity box in Y before X/Z passes so horizontal collision uses the correct position
+            // Commit Y so the horizontal passes use the correct foot position.
             entityBox.Translate(0.0, motionY, 0.0);
-            entity.CollidedVertically = collidedVertically;
+            entity.CollidedVertically = collidedV;
 
-            // Resolved support entity used to decide whether to skip horizontal collisions from the floor surface
-            Entity? resolvedSupportEntity = standingSupport?.SupportEntity ?? previousSupportEntity;
+            // ════════════════════════════════════════════════════════════════════════
+            // SUPPORT SCAN — completely independent of the collision passes above.
+            //
+            // We do NOT derive "standing on" from collision results.  Instead we cast
+            // a thin foot probe downward from pos.Y (the entity's origin, not Y1 of
+            // whichever collision box is current) to find any dynamic surface close
+            // beneath the feet.  This is stance-independent: crouching changes Y2 but
+            // pos.Y / feet-bottom is always the entity's world origin.
+            // ════════════════════════════════════════════════════════════════════════
 
-            // --- X pass (uses Y-translated entityBox) ---
-            for (int i = 0; i < terrainBoxes.Length && i < terrainCount; i++)
+            // Foot position after Y motion has been resolved.
+            double feetY = entityPos.Y + motionY - biasY;
+
+            // Probe box: a thin slab centred on the XZ position of the entity,
+            // spanning [feetY - SupportProbeBelow .. feetY + SupportProbeAbove].
+            // Width matches the entity's X/Z footprint; height is irrelevant to
+            // TryGetSupportTopUnderFeet which works from .Y1 (the feet level).
+            double probeX1 = entityBox.X1;
+            double probeX2 = entityBox.X2;
+            double probeZ1 = entityBox.Z1;
+            double probeZ2 = entityBox.Z2;
+            Cuboidd probeBox = new Cuboidd(
+                probeX1, feetY - SupportProbeBelow, probeZ1,
+                probeX2, feetY + SupportProbeAbove, probeZ2);
+
+            // Collect dynamic boxes that overlap the probe region (zero motion query).
+            List<DynamicCollisionBox> supportBoxes = CollectDynamicCollisionBoxes(
+                entity, entityPos.Dimension, probeBox,
+                0.0, 0.0, 0.0, stepHeight, yExtra);
+
+            // Find the highest surface whose top is within the probe band.
+            // We use a probe box whose Y1 = feetY so TryGetSupportTopUnderFeet
+            // samples at the right height.
+            Cuboidd feetProbe = new Cuboidd(
+                probeX1, feetY, probeZ1,
+                probeX2, feetY + SupportProbeAbove, probeZ2);
+
+            SupportCandidate? support = null;
+            for (int i = 0; i < supportBoxes.Count; i++)
             {
-                EnumPushDirection direction = EnumPushDirection.None;
-                motionX = terrainBoxes[i].pushOutX(entityBox, motionX, ref direction);
+                DynamicCollisionBox dyn = supportBoxes[i];
+                if (!dyn.CanSupport || dyn.SourceEntity == null) continue;
 
-                if (direction != EnumPushDirection.None)
-                {
-                    collidedHorizontally = true;
-                    collBlockPos.Set(tester.CollisionBoxList.positions[i]);
+                if (!TryGetSupportTopUnderFeet(feetProbe, dyn, out double topY)) continue;
 
-                    tester.CollisionBoxList.blocks[i].OnEntityCollide(
-                        world, entity, collBlockPos,
-                        direction == EnumPushDirection.Negative ? BlockFacing.EAST : BlockFacing.WEST,
-                        tester.tmpPosDelta.Set(motionX, motionY, motionZ),
-                        !entity.CollidedHorizontally
-                    );
-                }
+                double delta = feetY - topY;   // positive = feet above surface, negative = feet below
+                if (delta < -SupportProbeAbove || delta > SupportProbeBelow) continue;
+
+                if (support == null || topY > support.TopY)
+                    support = new SupportCandidate { SupportEntity = dyn.SourceEntity, DynamicBox = dyn, TopY = topY };
             }
 
-            for (int i = 0; i < dynamicBoxes.Count; i++)
+            // Snap feet to the surface and record support.
+            if (support != null)
             {
-                DynamicCollisionBox dynamicBox = dynamicBoxes[i];
-
-                if (ShouldIgnoreHorizontalDynamicCollision(dynamicBox, resolvedSupportEntity, entityBox))
-                    continue;
-
-                EnumPushDirection dynamicDirection = EnumPushDirection.None;
-                double pushedX = PushOutXObbAabb(dynamicBox, entityBox, motionX, ref dynamicDirection);
-
-                if (dynamicDirection != EnumPushDirection.None)
+                double snapDelta = support.TopY - feetY;
+                // Only snap if we are actually on or near the surface (not mid-air above it).
+                if (snapDelta >= -SupportProbeBelow && snapDelta <= SupportProbeAbove)
                 {
-                    motionX = pushedX;
-                    collidedHorizontally = true;
-                }
-            }
-
-            entityBox.Translate(motionX, 0.0, 0.0);
-
-            // --- Z pass (uses Y+X-translated entityBox) ---
-            for (int i = 0; i < terrainBoxes.Length && i < terrainCount; i++)
-            {
-                EnumPushDirection direction = EnumPushDirection.None;
-                motionZ = terrainBoxes[i].pushOutZ(entityBox, motionZ, ref direction);
-
-                if (direction != EnumPushDirection.None)
-                {
-                    collidedHorizontally = true;
-                    collBlockPos.Set(tester.CollisionBoxList.positions[i]);
-
-                    tester.CollisionBoxList.blocks[i].OnEntityCollide(
-                        world, entity, collBlockPos,
-                        direction == EnumPushDirection.Negative ? BlockFacing.SOUTH : BlockFacing.NORTH,
-                        tester.tmpPosDelta.Set(motionX, motionY, motionZ),
-                        !entity.CollidedHorizontally
-                    );
-                }
-            }
-
-            for (int i = 0; i < dynamicBoxes.Count; i++)
-            {
-                DynamicCollisionBox dynamicBox = dynamicBoxes[i];
-
-                if (ShouldIgnoreHorizontalDynamicCollision(dynamicBox, resolvedSupportEntity, entityBox))
-                    continue;
-
-                EnumPushDirection dynamicDirection = EnumPushDirection.None;
-                double pushedZ = PushOutZObbAabb(dynamicBox, entityBox, motionZ, ref dynamicDirection);
-
-                if (dynamicDirection != EnumPushDirection.None)
-                {
-                    motionZ = pushedZ;
-                    collidedHorizontally = true;
-                }
-            }
-
-            entity.CollidedHorizontally = collidedHorizontally;
-
-            // Remove bias before applying ladder fix (order matters)
-            motionX -= motionBiasX;
-            motionY -= motionBiasY;
-            motionZ -= motionBiasZ;
-
-            // Ladder fix applied after bias removal
-            if (motionY > 0.0 && entity.CollidedVertically)
-            {
-                motionY -= entity.LadderFixDelta;
-            }
-
-            double finalX = pos.X + motionX;
-            double finalY = pos.Y + motionY;
-            double finalZ = pos.Z + motionZ;
-
-            // Single final support snap pass (removed the mid-sweep duplicate)
-            Cuboidd finalEntityBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
-
-            List<DynamicCollisionBox> finalDynamicBoxes = CollectDynamicCollisionBoxes(
-                entity,
-                entityPos.Dimension,
-                finalEntityBox,
-                0.0, 0.0, 0.0,
-                stepHeight,
-                yExtra
-            );
-
-            SupportCandidate? finalSupport = FindBestSupportBelowFeet(finalEntityBox, finalDynamicBoxes);
-
-            if (finalSupport != null)
-            {
-                double snapDelta = finalSupport.TopY - finalEntityBox.Y1;
-
-                if (snapDelta >= -SupportSnapBelow && snapDelta <= SupportSnapAbove)
-                {
-                    finalY += snapDelta;
-                    finalEntityBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
-
-                    if (entityPos.Motion.Y < 0.0)
-                        entityPos.Motion.Y = 0.0;
-
+                    motionY += snapDelta;
+                    if (entityPos.Motion.Y < 0.0) entityPos.Motion.Y = 0.0;
                     entity.CollidedVertically = true;
                     entity.OnGround = true;
                 }
             }
 
-            if (finalSupport != null)
+            // ════════════════════════════════════════════════════════════════════════
+            // X PASS
+            // ════════════════════════════════════════════════════════════════════════
+
+            // Decide which support entity to use when ignoring its floor colliders
+            // in the horizontal passes (so standing on deck doesn't push you sideways).
+            Entity? resolvedSupport = support?.SupportEntity ?? prevSupport;
+
+            for (int i = 0; i < terrainCount && i < terrainBoxes.Length; i++)
             {
-                DynamicPhysicsBehaviour? supportPhysics = finalSupport.SupportEntity.GetBehavior<DynamicPhysicsBehaviour>();
+                EnumPushDirection dir = EnumPushDirection.None;
+                motionX = terrainBoxes[i].pushOutX(entityBox, motionX, ref dir);
+                if (dir == EnumPushDirection.None) continue;
+
+                collidedH = true;
+                collBlockPos.Set(tester.CollisionBoxList.positions[i]);
+                tester.CollisionBoxList.blocks[i].OnEntityCollide(
+                    world, entity, collBlockPos,
+                    dir == EnumPushDirection.Negative ? BlockFacing.EAST : BlockFacing.WEST,
+                    tester.tmpPosDelta.Set(motionX, motionY, motionZ),
+                    !entity.CollidedHorizontally);
+            }
+
+            for (int i = 0; i < dynBoxes.Count; i++)
+            {
+                if (IsFloorOfSupport(dynBoxes[i], resolvedSupport, entityBox)) continue;
+                EnumPushDirection dir = EnumPushDirection.None;
+                double swept = SweepAxisObbAabb(dynBoxes[i], entityBox, motionX, 0, ref dir);
+                if (dir == EnumPushDirection.None) continue;
+                motionX = swept;
+                collidedH = true;
+            }
+
+            entityBox.Translate(motionX, 0.0, 0.0);
+
+            // ════════════════════════════════════════════════════════════════════════
+            // Z PASS
+            // ════════════════════════════════════════════════════════════════════════
+
+            for (int i = 0; i < terrainCount && i < terrainBoxes.Length; i++)
+            {
+                EnumPushDirection dir = EnumPushDirection.None;
+                motionZ = terrainBoxes[i].pushOutZ(entityBox, motionZ, ref dir);
+                if (dir == EnumPushDirection.None) continue;
+
+                collidedH = true;
+                collBlockPos.Set(tester.CollisionBoxList.positions[i]);
+                tester.CollisionBoxList.blocks[i].OnEntityCollide(
+                    world, entity, collBlockPos,
+                    dir == EnumPushDirection.Negative ? BlockFacing.SOUTH : BlockFacing.NORTH,
+                    tester.tmpPosDelta.Set(motionX, motionY, motionZ),
+                    !entity.CollidedHorizontally);
+            }
+
+            for (int i = 0; i < dynBoxes.Count; i++)
+            {
+                if (IsFloorOfSupport(dynBoxes[i], resolvedSupport, entityBox)) continue;
+                EnumPushDirection dir = EnumPushDirection.None;
+                double swept = SweepAxisObbAabb(dynBoxes[i], entityBox, motionZ, 2, ref dir);
+                if (dir == EnumPushDirection.None) continue;
+                motionZ = swept;
+                collidedH = true;
+            }
+
+            entity.CollidedHorizontally = collidedH;
+
+            // ── remove bias, apply ladder fix ─────────────────────────────────────
+            motionX -= biasX;
+            motionY -= biasY;
+            motionZ -= biasZ;
+
+            if (motionY > 0.0 && entity.CollidedVertically)
+                motionY -= entity.LadderFixDelta;
+
+            // ── finalise position and support state ───────────────────────────────
+            double finalX = pos.X + motionX;
+            double finalY = pos.Y + motionY;
+            double finalZ = pos.Z + motionZ;
+
+            if (support != null)
+            {
+                Cuboidd finalBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
+                Vec3d feetCenter = new Vec3d(
+                    (finalBox.X1 + finalBox.X2) * 0.5,
+                    finalBox.Y1,
+                    (finalBox.Z1 + finalBox.Z2) * 0.5);
+
+                DynamicPhysicsBehaviour? supportPhysics =
+                    support.SupportEntity.GetBehavior<DynamicPhysicsBehaviour>();
+
                 if (supportPhysics != null &&
-                    supportPhysics.TryTransformWorldPointToLocal(GetFeetCenter(finalEntityBox), out Vector3 localAnchor))
+                    supportPhysics.TryTransformWorldPointToLocal(feetCenter, out Vector3 localAnchor))
                 {
-                    SetStandingOnEntity(entity, finalSupport.SupportEntity, localAnchor);
+                    SetStandingOnEntity(entity, support.SupportEntity, localAnchor);
                     entity.OnGround = true;
                 }
                 else
@@ -395,113 +377,140 @@ namespace PhysicsLib.patches
             newPosition.Set(finalX, finalY, finalZ);
         }
 
-        private static bool ShouldIgnoreHorizontalDynamicCollision(
-            DynamicCollisionBox dynamicBox,
-            Entity? resolvedSupportEntity,
+        // ── helper: should we skip horizontal collision against this box? ─────────
+        // Returns true only when the box belongs to our support entity AND the entity's
+        // feet are within the normal standing-contact band above the surface.  This
+        // stops the deck's own hull colliders from pushing the player sideways.
+        private static bool IsFloorOfSupport(
+            DynamicCollisionBox dynBox,
+            Entity? supportEntity,
             Cuboidd entityBox)
         {
-            if (resolvedSupportEntity == null) return false;
-            if (dynamicBox.SourceEntity != resolvedSupportEntity) return false;
-            if (!dynamicBox.CanSupport) return false;
+            if (supportEntity == null || dynBox.SourceEntity != supportEntity) return false;
+            if (!dynBox.CanSupport) return false;
 
-            if (!TryGetSupportTopUnderFeet(entityBox, dynamicBox, out double supportTopY))
-                return false;
+            if (!TryGetSupportTopUnderFeet(entityBox, dynBox, out double topY)) return false;
 
-            double feetDelta = entityBox.Y1 - supportTopY;
-
-            // Only ignore horizontal collision when the entity is sitting on top of this surface,
-            // not when approaching from the side (feetDelta < -tolerance means entity is below the surface top)
-            return feetDelta >= -FloorIgnoreTopTolerance && feetDelta <= FloorIgnoreTopTolerance;
+            double delta = entityBox.Y1 - topY;
+            // Only skip horizontal collision when the feet are within the normal
+            // standing band.  If the delta is very negative the player is approaching
+            // from the side and must be stopped.
+            return delta >= -(SupportProbeAbove) && delta <= SupportProbeBelow;
         }
 
-        private static Vec3d GetFeetCenter(Cuboidd entityBox)
-        {
-            return new Vec3d(
-                (entityBox.X1 + entityBox.X2) * 0.5,
-                entityBox.Y1,
-                (entityBox.Z1 + entityBox.Z2) * 0.5
-            );
-        }
-
-        private static SupportCandidate? FindBestSupportBelowFeet(
+        // ── swept AABB vs OBB along one world axis ────────────────────────────────
+        // This replaces the old PushOutAxisObbAabb which mixed swept and depenetration
+        // logic in ways that caused teleportation.
+        //
+        // Contract:
+        //   • If no collision: returns motion unchanged, direction = None.
+        //   • If collision:    returns the largest safe motion (≥0, ≤|motion|) that
+        //                      keeps a SweepSkin gap, sets direction.
+        //   • Never returns a value that moves the entity in the opposite direction.
+        private static double SweepAxisObbAabb(
+            DynamicCollisionBox obb,
             Cuboidd entityBox,
-            List<DynamicCollisionBox> dynamicBoxes)
+            double motion,
+            int axis,
+            ref EnumPushDirection direction)
         {
-            SupportCandidate? best = null;
+            direction = EnumPushDirection.None;
 
-            for (int i = 0; i < dynamicBoxes.Count; i++)
+            if (Math.Abs(motion) < 1e-12) return motion;
+
+            // Broad-phase: does the swept volume even touch the OBB?
+            Cuboidd movedBox = OffsetEntityBox(entityBox,
+                axis == 0 ? motion : 0.0,
+                axis == 1 ? motion : 0.0,
+                axis == 2 ? motion : 0.0);
+
+            bool startOverlap = IntersectsObbAabb(obb, entityBox);
+            bool endOverlap = IntersectsObbAabb(obb, movedBox);
+
+            // Already overlapping and moving away — allow, will resolve naturally.
+            if (startOverlap && !endOverlap) return motion;
+
+            // Already overlapping and moving further in — stop dead.
+            // (This should be rare; ideally the swept test catches it before it happens.)
+            if (startOverlap && endOverlap)
             {
-                DynamicCollisionBox dyn = dynamicBoxes[i];
-                if (!dyn.CanSupport || dyn.SourceEntity == null) continue;
-
-                if (!TryGetSupportTopUnderFeet(entityBox, dyn, out double supportTopY))
-                    continue;
-
-                double delta = entityBox.Y1 - supportTopY;
-                if (delta < -SupportSnapAbove || delta > SupportSnapBelow) continue;
-
-                if (best == null || supportTopY > best.TopY)
-                {
-                    best = new SupportCandidate
-                    {
-                        SupportEntity = dyn.SourceEntity,
-                        DynamicBox = dyn,
-                        TopY = supportTopY
-                    };
-                }
+                direction = motion > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
+                return 0.0;
             }
 
-            return best;
+            // Not overlapping at start — run the sweep.
+            if (!endOverlap) return motion;   // broad-phase miss after sweep, no collision
+
+            Vector3 sweep = axis switch
+            {
+                0 => new Vector3((float)motion, 0f, 0f),
+                1 => new Vector3(0f, (float)motion, 0f),
+                2 => new Vector3(0f, 0f, (float)motion),
+                _ => Vector3.Zero
+            };
+
+            if (!TrySweepAabbAgainstObb(entityBox, sweep, obb, out double hitFraction))
+                return motion;  // sweep says no collision despite broad-phase — trust broad-phase? No — let through.
+
+            // Leave a SweepSkin gap so we don't land flush on the surface.
+            double skinFraction = Math.Abs(motion) > 1e-9 ? SweepSkin / Math.Abs(motion) : 0.0;
+            double safeFraction = Math.Clamp(hitFraction - skinFraction, 0.0, 1.0);
+
+            direction = motion > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
+            return motion * safeFraction;
         }
 
+        // ── support surface detection ─────────────────────────────────────────────
+        // Samples five foot-level points in XZ and finds the highest point on the
+        // OBB surface directly below them.  Returns false if the OBB is not
+        // oriented roughly upward or no sample lands over the OBB.
         private static bool TryGetSupportTopUnderFeet(
             Cuboidd entityBox,
-            DynamicCollisionBox dynamicBox,
+            DynamicCollisionBox dynBox,
             out double supportTopY)
         {
             supportTopY = double.NegativeInfinity;
 
+            // Reject heavily-tilted surfaces (e.g. a mast lying on its side).
             Vector3 upAxis = SafeNormalize(
-                Vector3.Transform(Vector3.UnitY, dynamicBox.Orientation),
-                Vector3.UnitY
-            );
-
+                Vector3.Transform(Vector3.UnitY, dynBox.Orientation), Vector3.UnitY);
             if (upAxis.Y < MinSupportUpY) return false;
 
-            Quaternion inverseOrientation = Quaternion.Inverse(dynamicBox.Orientation);
+            Quaternion invOrientation = Quaternion.Inverse(dynBox.Orientation);
 
             double x1 = entityBox.X1 + SupportFootInset;
             double x2 = entityBox.X2 - SupportFootInset;
             double z1 = entityBox.Z1 + SupportFootInset;
             double z2 = entityBox.Z2 - SupportFootInset;
 
-            if (x1 > x2) { double mid = (entityBox.X1 + entityBox.X2) * 0.5; x1 = mid; x2 = mid; }
-            if (z1 > z2) { double mid = (entityBox.Z1 + entityBox.Z2) * 0.5; z1 = mid; z2 = mid; }
+            // Clamp so inset never flips for narrow boxes.
+            if (x1 > x2) x1 = x2 = (entityBox.X1 + entityBox.X2) * 0.5;
+            if (z1 > z2) z1 = z2 = (entityBox.Z1 + entityBox.Z2) * 0.5;
 
             double cx = (entityBox.X1 + entityBox.X2) * 0.5;
             double cz = (entityBox.Z1 + entityBox.Z2) * 0.5;
-            double fy = entityBox.Y1;
+            double fy = entityBox.Y1;   // feet level
 
-            Vector3[] samples =
+            Span<Vector3> samples = stackalloc Vector3[5]
             {
-                new Vector3((float)cx,  (float)fy, (float)cz),
-                new Vector3((float)x1,  (float)fy, (float)z1),
-                new Vector3((float)x1,  (float)fy, (float)z2),
-                new Vector3((float)x2,  (float)fy, (float)z1),
-                new Vector3((float)x2,  (float)fy, (float)z2)
+                new Vector3((float)cx, (float)fy, (float)cz),
+                new Vector3((float)x1, (float)fy, (float)z1),
+                new Vector3((float)x1, (float)fy, (float)z2),
+                new Vector3((float)x2, (float)fy, (float)z1),
+                new Vector3((float)x2, (float)fy, (float)z2),
             };
 
             bool found = false;
-
             for (int i = 0; i < samples.Length; i++)
             {
-                Vector3 local = Vector3.Transform(samples[i] - dynamicBox.Center, inverseOrientation);
+                Vector3 local = Vector3.Transform(samples[i] - dynBox.Center, invOrientation);
 
-                if (MathF.Abs(local.X) > dynamicBox.HalfExtents.X + (float)SupportHorizontalPadding) continue;
-                if (MathF.Abs(local.Z) > dynamicBox.HalfExtents.Z + (float)SupportHorizontalPadding) continue;
+                if (MathF.Abs(local.X) > dynBox.HalfExtents.X + (float)SupportHorizontalPadding) continue;
+                if (MathF.Abs(local.Z) > dynBox.HalfExtents.Z + (float)SupportHorizontalPadding) continue;
 
-                Vector3 topLocal = new Vector3(local.X, dynamicBox.HalfExtents.Y, local.Z);
-                Vector3 topWorld = dynamicBox.Center + Vector3.Transform(topLocal, dynamicBox.Orientation);
+                // Project sample onto the top face of the OBB.
+                Vector3 topLocal = new Vector3(local.X, dynBox.HalfExtents.Y, local.Z);
+                Vector3 topWorld = dynBox.Center + Vector3.Transform(topLocal, dynBox.Orientation);
 
                 if (!found || topWorld.Y > supportTopY)
                 {
@@ -512,6 +521,8 @@ namespace PhysicsLib.patches
 
             return found;
         }
+
+        // ── terrain collision box list ────────────────────────────────────────────
 
         private static void GenerateTerrainCollisionBoxList(
             CollisionTester tester,
@@ -524,16 +535,13 @@ namespace PhysicsLib.patches
             bool minUnchanged = tester.minPos.SetAndEquals(
                 (int)(entityBox.X1 + Math.Min(0.0, motionX)),
                 (int)(entityBox.Y1 + Math.Min(0.0, motionY) - yExtra),
-                (int)(entityBox.Z1 + Math.Min(0.0, motionZ))
-            );
+                (int)(entityBox.Z1 + Math.Min(0.0, motionZ)));
 
             double maxY = Math.Max(entityBox.Y1 + stepHeight, entityBox.Y2);
-
             bool maxUnchanged = tester.maxPos.SetAndEquals(
                 (int)(entityBox.X2 + Math.Max(0.0, motionX)),
                 (int)(maxY + Math.Max(0.0, motionY)),
-                (int)(entityBox.Z2 + Math.Max(0.0, motionZ))
-            );
+                (int)(entityBox.Z2 + Math.Max(0.0, motionZ)));
 
             if (minUnchanged && maxUnchanged) return;
 
@@ -541,17 +549,16 @@ namespace PhysicsLib.patches
             tester.tmpPos.dimension = dimension;
 
             blockAccessor.WalkBlocks(
-                tester.minPos,
-                tester.maxPos,
+                tester.minPos, tester.maxPos,
                 (block, x, y, z) =>
                 {
-                    Cuboidf[] collisionBoxes = block.GetCollisionBoxes(blockAccessor, tester.tmpPos.Set(x, y, z));
-                    if (collisionBoxes != null)
-                        tester.CollisionBoxList.Add(collisionBoxes, x, y, z, block);
+                    Cuboidf[]? boxes = block.GetCollisionBoxes(blockAccessor, tester.tmpPos.Set(x, y, z));
+                    if (boxes != null) tester.CollisionBoxList.Add(boxes, x, y, z, block);
                 },
-                centerOrder: true
-            );
+                centerOrder: true);
         }
+
+        // ── dynamic collision box collection ──────────────────────────────────────
 
         private static List<DynamicCollisionBox> CollectDynamicCollisionBoxes(
             Entity movingEntity, int dimension,
@@ -559,80 +566,57 @@ namespace PhysicsLib.patches
             double motionX, double motionY, double motionZ,
             float stepHeight, float yExtra)
         {
-            List<DynamicCollisionBox> results = new List<DynamicCollisionBox>();
+            var results = new List<DynamicCollisionBox>();
             if (DynamicCollisionSource == null) return results;
 
-            Cuboidd queryBox = movingEntityBox.Clone();
-            queryBox.X1 += Math.Min(0.0, motionX);
-            queryBox.Y1 += Math.Min(0.0, motionY) - yExtra;
-            queryBox.Z1 += Math.Min(0.0, motionZ);
-            queryBox.X2 += Math.Max(0.0, motionX);
-            queryBox.Y2 = Math.Max(queryBox.Y1 + stepHeight, queryBox.Y2 + Math.Max(0.0, motionY));
-            queryBox.Z2 += Math.Max(0.0, motionZ);
+            Cuboidd q = movingEntityBox.Clone();
+            q.X1 += Math.Min(0.0, motionX);
+            q.Y1 += Math.Min(0.0, motionY) - yExtra;
+            q.Z1 += Math.Min(0.0, motionZ);
+            q.X2 += Math.Max(0.0, motionX);
+            q.Y2 = Math.Max(q.Y1 + stepHeight, q.Y2 + Math.Max(0.0, motionY));
+            q.Z2 += Math.Max(0.0, motionZ);
 
-            DynamicCollisionSource.CollectCollisionBoxes(movingEntity, queryBox, results);
-
-            // FIX: Enforce a minimum half-extent on thin colliders (e.g. masts) so the swept
-            // test can catch them before the AABB tunnels fully inside in one frame.
-            for (int i = 0; i < results.Count; i++)
-            {
-                DynamicCollisionBox box = results[i];
-                Vector3 he = box.HalfExtents;
-                bool changed = false;
-
-                if (he.X < MinDynamicColliderHalfExtent) { he.X = MinDynamicColliderHalfExtent; changed = true; }
-                if (he.Z < MinDynamicColliderHalfExtent) { he.Z = MinDynamicColliderHalfExtent; changed = true; }
-
-                if (changed)
-                    box.HalfExtents = he;
-            }
-
+            DynamicCollisionSource.CollectCollisionBoxes(movingEntity, q, results);
             return results;
         }
 
-        private static Cuboidd OffsetEntityBox(Cuboidd box, double x, double y, double z)
-        {
-            return new Cuboidd(
-                box.X1 + x, box.Y1 + y, box.Z1 + z,
-                box.X2 + x, box.Y2 + y, box.Z2 + z
-            );
-        }
+        // ── geometry utilities ────────────────────────────────────────────────────
 
+        private static Cuboidd OffsetEntityBox(Cuboidd b, double x, double y, double z)
+            => new Cuboidd(b.X1 + x, b.Y1 + y, b.Z1 + z, b.X2 + x, b.Y2 + y, b.Z2 + z);
+
+        // SAT overlap test between an OBB and an AABB.
         private static bool IntersectsObbAabb(DynamicCollisionBox obb, Cuboidd aabb)
         {
             Vector3 aabbCenter = new Vector3(
                 (float)((aabb.X1 + aabb.X2) * 0.5),
                 (float)((aabb.Y1 + aabb.Y2) * 0.5),
-                (float)((aabb.Z1 + aabb.Z2) * 0.5)
-            );
-
+                (float)((aabb.Z1 + aabb.Z2) * 0.5));
             Vector3 aabbHalf = new Vector3(
                 (float)((aabb.X2 - aabb.X1) * 0.5),
                 (float)((aabb.Y2 - aabb.Y1) * 0.5),
-                (float)((aabb.Z2 - aabb.Z1) * 0.5)
-            );
+                (float)((aabb.Z2 - aabb.Z1) * 0.5));
 
             Vector3[] a =
             {
                 SafeNormalize(Vector3.Transform(Vector3.UnitX, obb.Orientation), Vector3.UnitX),
                 SafeNormalize(Vector3.Transform(Vector3.UnitY, obb.Orientation), Vector3.UnitY),
-                SafeNormalize(Vector3.Transform(Vector3.UnitZ, obb.Orientation), Vector3.UnitZ)
+                SafeNormalize(Vector3.Transform(Vector3.UnitZ, obb.Orientation), Vector3.UnitZ),
             };
 
             float[] ea = { obb.HalfExtents.X, obb.HalfExtents.Y, obb.HalfExtents.Z };
             float[] eb = { aabbHalf.X, aabbHalf.Y, aabbHalf.Z };
 
+            const float eps = 1e-6f;
             float[,] r = new float[3, 3];
             float[,] absR = new float[3, 3];
-
-            const float epsilon = 1e-6f;
-
             for (int i = 0; i < 3; i++)
             {
                 r[i, 0] = a[i].X; r[i, 1] = a[i].Y; r[i, 2] = a[i].Z;
-                absR[i, 0] = MathF.Abs(r[i, 0]) + epsilon;
-                absR[i, 1] = MathF.Abs(r[i, 1]) + epsilon;
-                absR[i, 2] = MathF.Abs(r[i, 2]) + epsilon;
+                absR[i, 0] = MathF.Abs(r[i, 0]) + eps;
+                absR[i, 1] = MathF.Abs(r[i, 1]) + eps;
+                absR[i, 2] = MathF.Abs(r[i, 2]) + eps;
             }
 
             Vector3 tWorld = aabbCenter - obb.Center;
@@ -644,189 +628,26 @@ namespace PhysicsLib.patches
                 float rb = eb[0] * absR[i, 0] + eb[1] * absR[i, 1] + eb[2] * absR[i, 2];
                 if (MathF.Abs(t[i]) > ra + rb) return false;
             }
-
-            // AABB face axes
             for (int j = 0; j < 3; j++)
             {
                 float ra = ea[0] * absR[0, j] + ea[1] * absR[1, j] + ea[2] * absR[2, j];
                 float rb = eb[j];
-                float projectedT = MathF.Abs(t[0] * r[0, j] + t[1] * r[1, j] + t[2] * r[2, j]);
-                if (projectedT > ra + rb) return false;
+                float pt = MathF.Abs(t[0] * r[0, j] + t[1] * r[1, j] + t[2] * r[2, j]);
+                if (pt > ra + rb) return false;
             }
-
-            // Cross product axes
             for (int i = 0; i < 3; i++)
-            {
                 for (int j = 0; j < 3; j++)
                 {
-                    float ra =
-                        ea[(i + 1) % 3] * absR[(i + 2) % 3, j] +
-                        ea[(i + 2) % 3] * absR[(i + 1) % 3, j];
-
-                    float rb =
-                        eb[(j + 1) % 3] * absR[i, (j + 2) % 3] +
-                        eb[(j + 2) % 3] * absR[i, (j + 1) % 3];
-
-                    float projectedT = MathF.Abs(
-                        t[(i + 2) % 3] * r[(i + 1) % 3, j] -
-                        t[(i + 1) % 3] * r[(i + 2) % 3, j]
-                    );
-
-                    if (projectedT > ra + rb) return false;
+                    float ra = ea[(i + 1) % 3] * absR[(i + 2) % 3, j] + ea[(i + 2) % 3] * absR[(i + 1) % 3, j];
+                    float rb = eb[(j + 1) % 3] * absR[i, (j + 2) % 3] + eb[(j + 2) % 3] * absR[i, (j + 1) % 3];
+                    float pt = MathF.Abs(t[(i + 2) % 3] * r[(i + 1) % 3, j] - t[(i + 1) % 3] * r[(i + 2) % 3, j]);
+                    if (pt > ra + rb) return false;
                 }
-            }
-
             return true;
         }
 
-        /// <summary>
-        /// Computes the signed penetration depth of the AABB into the OBB along a given world axis.
-        /// Returns 0 if not overlapping on this axis.
-        /// Positive result = AABB must move in +axis direction to escape.
-        /// </summary>
-        private static double ComputePenetrationDepthAlongAxis(
-            DynamicCollisionBox obb,
-            Cuboidd aabb,
-            int axis)
-        {
-            // Project both shapes onto the world axis
-            double aabbMin = axis == 0 ? aabb.X1 : axis == 1 ? aabb.Y1 : aabb.Z1;
-            double aabbMax = axis == 0 ? aabb.X2 : axis == 1 ? aabb.Y2 : aabb.Z2;
-
-            // Project OBB onto world axis using support mapping
-            Vector3 worldAxis = axis == 0 ? Vector3.UnitX : axis == 1 ? Vector3.UnitY : Vector3.UnitZ;
-
-            Vector3 ax = SafeNormalize(Vector3.Transform(Vector3.UnitX, obb.Orientation), Vector3.UnitX);
-            Vector3 ay = SafeNormalize(Vector3.Transform(Vector3.UnitY, obb.Orientation), Vector3.UnitY);
-            Vector3 az = SafeNormalize(Vector3.Transform(Vector3.UnitZ, obb.Orientation), Vector3.UnitZ);
-
-            float obbCenterProj = Vector3.Dot(obb.Center, worldAxis);
-            float obbRadius =
-                MathF.Abs(Vector3.Dot(ax, worldAxis)) * obb.HalfExtents.X +
-                MathF.Abs(Vector3.Dot(ay, worldAxis)) * obb.HalfExtents.Y +
-                MathF.Abs(Vector3.Dot(az, worldAxis)) * obb.HalfExtents.Z;
-
-            double obbMin = obbCenterProj - obbRadius;
-            double obbMax = obbCenterProj + obbRadius;
-
-            // No overlap → no penetration
-            if (aabbMax <= obbMin || aabbMin >= obbMax) return 0.0;
-
-            // Penetration from positive side (push AABB in +axis)
-            double overlapPos = obbMax - aabbMin;
-            // Penetration from negative side (push AABB in -axis)
-            double overlapNeg = aabbMax - obbMin;
-
-            // Return the smallest correction (signed)
-            if (overlapPos < overlapNeg)
-                return overlapPos;   // positive: move AABB in +axis
-            else
-                return -overlapNeg;  // negative: move AABB in -axis
-        }
-
-        private static double PushOutAxisObbAabb(
-            DynamicCollisionBox obb,
-            Cuboidd entityBox,
-            double motion,
-            int axis,
-            ref EnumPushDirection direction)
-        {
-            direction = EnumPushDirection.None;
-
-            Cuboidd movedBox = axis switch
-            {
-                0 => OffsetEntityBox(entityBox, motion, 0.0, 0.0),
-                1 => OffsetEntityBox(entityBox, 0.0, motion, 0.0),
-                2 => OffsetEntityBox(entityBox, 0.0, 0.0, motion),
-                _ => entityBox
-            };
-
-            bool startsIntersecting = IntersectsObbAabb(obb, entityBox);
-            bool endsIntersecting = IntersectsObbAabb(obb, movedBox);
-
-            // Moving away from an overlap — let it pass through to resolve
-            if (startsIntersecting && !endsIntersecting)
-                return motion;
-
-            // Already overlapping and staying overlapping — depenetrate along this axis.
-            //
-            // This branch is reached when:
-            //   (a) The entity tunnelled into a thin collider in one frame (mast, rope, etc.)
-            //   (b) The min-extent padding caused a marginal pre-overlap at rest
-            //   (c) Floating-point drift left the entity just inside a surface
-            //
-            // Rules:
-            //   1. Always register the collision (set direction) so callers know contact occurred.
-            //   2. If motion and pen agree in sign: clamp to pen (push out, don't overshoot).
-            //   3. If motion and pen disagree in sign: the entity is moving INTO the collider
-            //      from a pre-existing overlap — stop it at 0.0 (wall it off) but still flag
-            //      the direction so CollidedHorizontally / CollidedVertically get set.
-            //   4. If motion is zero (standing still in overlap): nudge by pen but cap the nudge
-            //      to a small depenetration budget so we don't launch the entity on flat ground.
-            if (startsIntersecting && endsIntersecting)
-            {
-                double pen = ComputePenetrationDepthAlongAxis(obb, entityBox, axis);
-                if (Math.Abs(pen) < 1e-10) return motion;
-
-                direction = pen > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
-
-                if (motion == 0.0)
-                {
-                    // Standing still — tiny nudge only, never more than 1/4 of a block per frame
-                    const double MaxRestNudge = 0.25;
-                    return Math.Clamp(pen, -MaxRestNudge, MaxRestNudge);
-                }
-
-                if (Math.Sign(pen) != Math.Sign(motion))
-                {
-                    // Moving into a pre-existing overlap — stop here, wall blocked
-                    return 0.0;
-                }
-
-                // Moving away from (or parallel to) the overlap — clamp to pen, never overshoot
-                return Math.Abs(pen) < Math.Abs(motion) ? pen : motion;
-            }
-
-            // Not intersecting at start — do a swept test
-            if (!endsIntersecting)
-                return motion;
-
-            Vector3 sweep = axis switch
-            {
-                0 => new Vector3((float)motion, 0f, 0f),
-                1 => new Vector3(0f, (float)motion, 0f),
-                2 => new Vector3(0f, 0f, (float)motion),
-                _ => Vector3.Zero
-            };
-
-            if (!TrySweepAabbAgainstObb(entityBox, sweep, obb, out double hitFraction))
-                return motion;
-
-            double safeFraction = hitFraction;
-
-            if (Math.Abs(motion) > SweepSkin)
-                safeFraction -= SweepSkin / Math.Abs(motion);
-            else
-                safeFraction = 0.0;
-
-            safeFraction = Math.Clamp(safeFraction, 0.0, 1.0);
-
-            double pushed = motion * safeFraction;
-
-            direction = motion > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
-
-            return pushed;
-        }
-
-        private static double PushOutXObbAabb(DynamicCollisionBox obb, Cuboidd entityBox, double motionX, ref EnumPushDirection direction)
-            => PushOutAxisObbAabb(obb, entityBox, motionX, 0, ref direction);
-
-        private static double PushOutYObbAabb(DynamicCollisionBox obb, Cuboidd entityBox, double motionY, ref EnumPushDirection direction)
-            => PushOutAxisObbAabb(obb, entityBox, motionY, 1, ref direction);
-
-        private static double PushOutZObbAabb(DynamicCollisionBox obb, Cuboidd entityBox, double motionZ, ref EnumPushDirection direction)
-            => PushOutAxisObbAabb(obb, entityBox, motionZ, 2, ref direction);
-
+        // Conservative swept AABB vs OBB using separating axis theorem.
+        // Returns the earliest time of contact in [0,1] along the sweep vector.
         private static bool TrySweepAabbAgainstObb(
             Cuboidd movingAabb,
             Vector3 sweep,
@@ -838,119 +659,84 @@ namespace PhysicsLib.patches
             Vector3 movingCenter = new Vector3(
                 (float)((movingAabb.X1 + movingAabb.X2) * 0.5),
                 (float)((movingAabb.Y1 + movingAabb.Y2) * 0.5),
-                (float)((movingAabb.Z1 + movingAabb.Z2) * 0.5)
-            );
-
+                (float)((movingAabb.Z1 + movingAabb.Z2) * 0.5));
             Vector3 movingHalf = new Vector3(
                 (float)((movingAabb.X2 - movingAabb.X1) * 0.5),
                 (float)((movingAabb.Y2 - movingAabb.Y1) * 0.5),
-                (float)((movingAabb.Z2 - movingAabb.Z1) * 0.5)
-            );
+                (float)((movingAabb.Z2 - movingAabb.Z1) * 0.5));
 
             Vector3[] obbAxes =
             {
                 SafeNormalize(Vector3.Transform(Vector3.UnitX, staticObb.Orientation), Vector3.UnitX),
                 SafeNormalize(Vector3.Transform(Vector3.UnitY, staticObb.Orientation), Vector3.UnitY),
-                SafeNormalize(Vector3.Transform(Vector3.UnitZ, staticObb.Orientation), Vector3.UnitZ)
+                SafeNormalize(Vector3.Transform(Vector3.UnitZ, staticObb.Orientation), Vector3.UnitZ),
             };
-
             Vector3[] worldAxes = { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ };
 
-            double enter = 0.0;
-            double exit = 1.0;
+            double enter = 0.0, exit = 1.0;
 
             for (int i = 0; i < 3; i++)
-            {
                 if (!SweepTestAxis(obbAxes[i], movingCenter, movingHalf, sweep,
-                    staticObb.Center, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
+                        staticObb.Center, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
                     return false;
-            }
 
             for (int i = 0; i < 3; i++)
-            {
                 if (!SweepTestAxis(worldAxes[i], movingCenter, movingHalf, sweep,
-                    staticObb.Center, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
+                        staticObb.Center, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
                     return false;
-            }
 
             for (int i = 0; i < 3; i++)
-            {
                 for (int j = 0; j < 3; j++)
                 {
-                    Vector3 crossAxis = Vector3.Cross(obbAxes[i], worldAxes[j]);
-                    if (crossAxis.LengthSquared() <= 1e-8f) continue;
-                    crossAxis = Vector3.Normalize(crossAxis);
-
-                    if (!SweepTestAxis(crossAxis, movingCenter, movingHalf, sweep,
-                        staticObb.Center, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
+                    Vector3 cross = Vector3.Cross(obbAxes[i], worldAxes[j]);
+                    if (cross.LengthSquared() <= 1e-8f) continue;
+                    cross = Vector3.Normalize(cross);
+                    if (!SweepTestAxis(cross, movingCenter, movingHalf, sweep,
+                            staticObb.Center, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
                         return false;
                 }
-            }
 
             if (exit < 0.0 || enter > 1.0) return false;
-
             hitFraction = Math.Clamp(enter, 0.0, 1.0);
             return true;
         }
 
         private static bool SweepTestAxis(
             Vector3 axis,
-            Vector3 movingCenter,
-            Vector3 movingHalf,
-            Vector3 sweep,
-            Vector3 staticCenter,
-            Vector3 staticHalf,
-            Vector3[] staticAxes,
-            ref double enter,
-            ref double exit)
+            Vector3 movingCenter, Vector3 movingHalf, Vector3 sweep,
+            Vector3 staticCenter, Vector3 staticHalf, Vector3[] staticAxes,
+            ref double enter, ref double exit)
         {
-            const double epsilon = 1e-9;
+            const double eps = 1e-9;
 
-            double movingProjection = Vector3.Dot(movingCenter, axis);
-            double staticProjection = Vector3.Dot(staticCenter, axis);
-            double velocityProjection = Vector3.Dot(sweep, axis);
+            double mProj = Vector3.Dot(movingCenter, axis);
+            double sProj = Vector3.Dot(staticCenter, axis);
+            double vel = Vector3.Dot(sweep, axis);
 
-            double movingRadius =
+            double mRad =
                 Math.Abs(axis.X) * movingHalf.X +
                 Math.Abs(axis.Y) * movingHalf.Y +
                 Math.Abs(axis.Z) * movingHalf.Z;
-
-            double staticRadius =
+            double sRad =
                 Math.Abs(Vector3.Dot(axis, staticAxes[0])) * staticHalf.X +
                 Math.Abs(Vector3.Dot(axis, staticAxes[1])) * staticHalf.Y +
                 Math.Abs(Vector3.Dot(axis, staticAxes[2])) * staticHalf.Z;
 
-            double movingMin = movingProjection - movingRadius;
-            double movingMax = movingProjection + movingRadius;
-            double staticMin = staticProjection - staticRadius;
-            double staticMax = staticProjection + staticRadius;
+            double mMin = mProj - mRad, mMax = mProj + mRad;
+            double sMin = sProj - sRad, sMax = sProj + sRad;
 
-            if (Math.Abs(velocityProjection) <= epsilon)
-                return movingMax >= staticMin && movingMin <= staticMax;
+            if (Math.Abs(vel) <= eps)
+                return mMax >= sMin && mMin <= sMax;
 
-            double axisEnter, axisExit;
+            double axEnter = vel > 0.0 ? (sMin - mMax) / vel : (sMax - mMin) / vel;
+            double axExit = vel > 0.0 ? (sMax - mMin) / vel : (sMin - mMax) / vel;
 
-            if (velocityProjection > 0.0)
-            {
-                axisEnter = (staticMin - movingMax) / velocityProjection;
-                axisExit = (staticMax - movingMin) / velocityProjection;
-            }
-            else
-            {
-                axisEnter = (staticMax - movingMin) / velocityProjection;
-                axisExit = (staticMin - movingMax) / velocityProjection;
-            }
-
-            if (axisEnter > enter) enter = axisEnter;
-            if (axisExit < exit) exit = axisExit;
-
+            if (axEnter > enter) enter = axEnter;
+            if (axExit < exit) exit = axExit;
             return enter <= exit;
         }
 
-        private static Vector3 SafeNormalize(Vector3 value, Vector3 fallback)
-        {
-            if (value.LengthSquared() <= 1e-10f) return fallback;
-            return Vector3.Normalize(value);
-        }
+        private static Vector3 SafeNormalize(Vector3 v, Vector3 fallback)
+            => v.LengthSquared() > 1e-10f ? Vector3.Normalize(v) : fallback;
     }
 }
