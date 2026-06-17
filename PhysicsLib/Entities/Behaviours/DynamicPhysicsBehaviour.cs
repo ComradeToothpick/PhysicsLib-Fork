@@ -408,12 +408,7 @@ namespace PhysicsLib.Entities.Behaviours
             Matrix4x4 rotateZ = elem.RotationZ != 0.0 ? Matrix4x4.CreateRotationZ(DegreesToRadians((float)elem.RotationZ)) : Matrix4x4.Identity;
             Matrix4x4 translateOrigin = Matrix4x4.CreateTranslation(ox, oy, oz);
 
-            // In a mirrored parent frame (parentXSign < 0, i.e. an odd number of Y-180
-            // rotations in the ancestor chain), the extrinsic rotation order is Rz * Ry * Rx.
-            // In a normal frame it is Rx * Ry * Rz.
-            Matrix4x4 rotations = parentXSign < 0f
-                ? rotateZ * rotateY * rotateX
-                : rotateX * rotateY * rotateZ;
+            Matrix4x4 rotations = rotateZ * rotateY * rotateX;
 
             return translateFromMinusOrigin * scale * rotations * translateOrigin;
         }

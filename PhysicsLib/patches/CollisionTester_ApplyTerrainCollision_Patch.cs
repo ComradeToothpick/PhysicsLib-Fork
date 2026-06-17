@@ -44,6 +44,11 @@ namespace PhysicsLib.patches
 
         private const double SweepSkin = 0.00001;
 
+        // Minimum half-extent enforced on thin dynamic colliders to prevent tunneling.
+        // Masts and other thin geometry can be narrower than one tick of player motion,
+        // causing the AABB to start the next frame already overlapping.
+        private const float MinDynamicColliderHalfExtent = 0.05f;
+
         [HarmonyPrefix]
         public static bool Prefix(
             CollisionTester __instance,
@@ -566,6 +571,22 @@ namespace PhysicsLib.patches
             queryBox.Z2 += Math.Max(0.0, motionZ);
 
             DynamicCollisionSource.CollectCollisionBoxes(movingEntity, queryBox, results);
+
+            // FIX: Enforce a minimum half-extent on thin colliders (e.g. masts) so the swept
+            // test can catch them before the AABB tunnels fully inside in one frame.
+            for (int i = 0; i < results.Count; i++)
+            {
+                DynamicCollisionBox box = results[i];
+                Vector3 he = box.HalfExtents;
+                bool changed = false;
+
+                if (he.X < MinDynamicColliderHalfExtent) { he.X = MinDynamicColliderHalfExtent; changed = true; }
+                if (he.Z < MinDynamicColliderHalfExtent) { he.Z = MinDynamicColliderHalfExtent; changed = true; }
+
+                if (changed)
+                    box.HalfExtents = he;
+            }
+
             return results;
         }
 
@@ -727,14 +748,43 @@ namespace PhysicsLib.patches
             if (startsIntersecting && !endsIntersecting)
                 return motion;
 
-            // Already overlapping and staying overlapping — depenetrate along this axis
+            // Already overlapping and staying overlapping — depenetrate along this axis.
+            //
+            // This branch is reached when:
+            //   (a) The entity tunnelled into a thin collider in one frame (mast, rope, etc.)
+            //   (b) The min-extent padding caused a marginal pre-overlap at rest
+            //   (c) Floating-point drift left the entity just inside a surface
+            //
+            // Rules:
+            //   1. Always register the collision (set direction) so callers know contact occurred.
+            //   2. If motion and pen agree in sign: clamp to pen (push out, don't overshoot).
+            //   3. If motion and pen disagree in sign: the entity is moving INTO the collider
+            //      from a pre-existing overlap — stop it at 0.0 (wall it off) but still flag
+            //      the direction so CollidedHorizontally / CollidedVertically get set.
+            //   4. If motion is zero (standing still in overlap): nudge by pen but cap the nudge
+            //      to a small depenetration budget so we don't launch the entity on flat ground.
             if (startsIntersecting && endsIntersecting)
             {
                 double pen = ComputePenetrationDepthAlongAxis(obb, entityBox, axis);
                 if (Math.Abs(pen) < 1e-10) return motion;
 
                 direction = pen > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
-                return pen;
+
+                if (motion == 0.0)
+                {
+                    // Standing still — tiny nudge only, never more than 1/4 of a block per frame
+                    const double MaxRestNudge = 0.25;
+                    return Math.Clamp(pen, -MaxRestNudge, MaxRestNudge);
+                }
+
+                if (Math.Sign(pen) != Math.Sign(motion))
+                {
+                    // Moving into a pre-existing overlap — stop here, wall blocked
+                    return 0.0;
+                }
+
+                // Moving away from (or parallel to) the overlap — clamp to pen, never overshoot
+                return Math.Abs(pen) < Math.Abs(motion) ? pen : motion;
             }
 
             // Not intersecting at start — do a swept test
