@@ -550,7 +550,6 @@ namespace PhysicsLib.patches
 
             if (Math.Abs(motion) < 1e-12) return motion;
 
-            // Broad-phase: does the swept volume even touch the OBB?
             Cuboidd movedBox = OffsetEntityBox(entityBox,
                 axis == 0 ? motion : 0.0,
                 axis == 1 ? motion : 0.0,
@@ -559,26 +558,35 @@ namespace PhysicsLib.patches
             bool startOverlap = IntersectsObbAabb(obb, entityBox);
             bool endOverlap = IntersectsObbAabb(obb, movedBox);
 
-            // Already overlapping and moving away — allow, will resolve naturally.
+            // Moving away from an existing overlap — allow.
             if (startOverlap && !endOverlap) return motion;
 
-            // Already overlapping and moving further in.
-            // Check whether this is a floor the entity is resting on top of (Y pass
-            // already resolved vertical contact) vs a wall being approached horizontally.
-            // If the entity's feet (entityBox.Y1) are at or above the OBB center Y,
-            // the entity is on top — allow horizontal motion freely.
-            // Otherwise it's a genuine horizontal penetration — stop dead.
+            // Pre-existing overlap and not moving away.
             if (startOverlap && endOverlap)
             {
-                if (axis != 1 && entityBox.Y1 >= obb.CenterD.Y)
-                    return motion;  // standing on top of this collider — floor, not wall
+                if (axis == 1)
+                {
+                    // Vertical axis — stop.
+                    direction = motion > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
+                    return 0.0;
+                }
+
+                // Horizontal axis — the entity is inside this collider already.
+                // Determine whether this is a floor (contact normal mostly vertical)
+                // or a wall (contact normal mostly horizontal).
+                // We detect this by checking which world axis has the smallest overlap
+                // via ComputePenetrationAxes. If the minimum-penetration axis is Y,
+                // it's a floor and horizontal motion should pass freely.
+                // If it's X or Z, it's a wall and we stop.
+                if (IsContactNormalMostlyVertical(obb, entityBox))
+                    return motion;  // floor — pass through horizontally
 
                 direction = motion > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
                 return 0.0;
             }
 
-            // Not overlapping at start — run the sweep.
-            if (!endOverlap) return motion;   // broad-phase miss after sweep, no collision
+            // No start overlap — run swept test.
+            if (!endOverlap) return motion;
 
             Vector3 sweep = axis switch
             {
@@ -589,14 +597,60 @@ namespace PhysicsLib.patches
             };
 
             if (!TrySweepAabbAgainstObb(entityBox, sweep, obb, out double hitFraction))
-                return motion;  // sweep says no collision despite broad-phase — trust broad-phase? No — let through.
+                return motion;
 
-            // Leave a SweepSkin gap so we don't land flush on the surface.
             double skinFraction = Math.Abs(motion) > 1e-9 ? SweepSkin / Math.Abs(motion) : 0.0;
             double safeFraction = Math.Clamp(hitFraction - skinFraction, 0.0, 1.0);
 
             direction = motion > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
             return motion * safeFraction;
+        }
+
+        // Returns true if the minimum-penetration axis between the OBB and AABB is
+        // predominantly vertical — meaning the entity is resting on top of this collider
+        // rather than colliding with it from the side.
+        private static bool IsContactNormalMostlyVertical(DynamicCollisionBox obb, Cuboidd aabb)
+        {
+            // Project both shapes onto each world axis and find the smallest overlap.
+            // The axis with the smallest overlap is the contact normal direction.
+            double minOverlap = double.MaxValue;
+            int minAxis = 1; // default to Y
+
+            Vector3 aabbHalf = new Vector3(
+                (float)((aabb.X2 - aabb.X1) * 0.5),
+                (float)((aabb.Y2 - aabb.Y1) * 0.5),
+                (float)((aabb.Z2 - aabb.Z1) * 0.5));
+
+            Vector3[] obbAxes =
+            {
+                SafeNormalize(Vector3.Transform(Vector3.UnitX, obb.Orientation), Vector3.UnitX),
+                SafeNormalize(Vector3.Transform(Vector3.UnitY, obb.Orientation), Vector3.UnitY),
+                SafeNormalize(Vector3.Transform(Vector3.UnitZ, obb.Orientation), Vector3.UnitZ),
+            };
+            Vector3[] worldAxes = { Vector3.UnitX, Vector3.UnitY, Vector3.UnitZ };
+
+            // Test world axes only (sufficient for axis-aligned contact normal detection).
+            for (int i = 0; i < 3; i++)
+            {
+                Vector3 axis = worldAxes[i];
+
+                double aabbCenterProj = axis.X * ((aabb.X1 + aabb.X2) * 0.5)
+                                      + axis.Y * ((aabb.Y1 + aabb.Y2) * 0.5)
+                                      + axis.Z * ((aabb.Z1 + aabb.Z2) * 0.5);
+                double aabbR = Math.Abs(axis.X) * aabbHalf.X + Math.Abs(axis.Y) * aabbHalf.Y + Math.Abs(axis.Z) * aabbHalf.Z;
+
+                double obbCenterProj = axis.X * obb.CenterD.X + axis.Y * obb.CenterD.Y + axis.Z * obb.CenterD.Z;
+                double obbR =
+                    Math.Abs(Vector3.Dot(axis, obbAxes[0])) * obb.HalfExtents.X +
+                    Math.Abs(Vector3.Dot(axis, obbAxes[1])) * obb.HalfExtents.Y +
+                    Math.Abs(Vector3.Dot(axis, obbAxes[2])) * obb.HalfExtents.Z;
+
+                double overlap = (aabbR + obbR) - Math.Abs(aabbCenterProj - obbCenterProj);
+                if (overlap < minOverlap) { minOverlap = overlap; minAxis = i; }
+            }
+
+            // minAxis == 1 means Y is the minimum-penetration axis — contact normal is vertical.
+            return minAxis == 1;
         }
 
         // ── support surface detection ─────────────────────────────────────────────
