@@ -11,50 +11,45 @@ namespace PhysicsLib.Api.CollisionSource
     {
         private ICoreAPI api;
 
+        // All registered physics entities. Registered on behaviour Initialize,
+        // unregistered on despawn. We iterate this directly rather than using
+        // GetEntitiesAround, which uses the entity's vanilla CollisionBox for
+        // spatial lookup — that box only covers the entity origin, so the rear
+        // of a long boat (many blocks from origin) is never found.
+        private readonly List<DynamicPhysicsBehaviour> registeredBehaviours = new();
+
         public DynamicCollisionSource(ICoreAPI api) { this.api = api; }
+
+        public void Register(DynamicPhysicsBehaviour behaviour)
+        {
+            if (!registeredBehaviours.Contains(behaviour))
+                registeredBehaviours.Add(behaviour);
+        }
+
+        public void Unregister(DynamicPhysicsBehaviour behaviour)
+        {
+            registeredBehaviours.Remove(behaviour);
+        }
 
         public void CollectCollisionBoxes(
             Entity movingEntity,
             Cuboidd queryBox,
             List<DynamicCollisionBox> results)
         {
-            double centerX = (queryBox.X1 + queryBox.X2) * 0.5;
-            double centerY = (queryBox.Y1 + queryBox.Y2) * 0.5;
-            double centerZ = (queryBox.Z1 + queryBox.Z2) * 0.5;
-
-            double rangeX = Math.Max(1.0, (queryBox.X2 - queryBox.X1) * 0.5 + 2.0);
-            double rangeY = Math.Max(1.0, (queryBox.Y2 - queryBox.Y1) * 0.5 + 2.0);
-            Entity[] nearby;
-            if (movingEntity != null)
-                nearby = movingEntity.World.GetEntitiesAround(
-                    new Vec3d(centerX, centerY, centerZ),
-                    (float)rangeX,
-                    (float)rangeY,
-                    e => e != null && e.EntityId != movingEntity.EntityId
-                );
-            else 
-                 nearby = api.World.GetEntitiesAround(
-                    new Vec3d(centerX, centerY, centerZ),
-                    (float)rangeX,
-                    (float)rangeY,
-                    e => e != null
-                );
-            
-
-            if (nearby == null || nearby.Length == 0)
-                return;
-
-            for (int i = 0; i < nearby.Length; i++)
+            for (int i = registeredBehaviours.Count - 1; i >= 0; i--)
             {
-                Entity candidate = nearby[i];
-                if (candidate == null || (movingEntity != null && candidate.EntityId == movingEntity.EntityId))
+                DynamicPhysicsBehaviour behaviour = registeredBehaviours[i];
+
+                if (behaviour == null || behaviour.entity == null || !behaviour.entity.Alive)
+                {
+                    registeredBehaviours.RemoveAt(i);
+                    continue;
+                }
+
+                if (movingEntity != null && behaviour.entity.EntityId == movingEntity.EntityId)
                     continue;
 
-                DynamicPhysicsBehaviour? bepuBehavior = candidate.GetBehavior<DynamicPhysicsBehaviour>();
-                if (bepuBehavior == null)
-                    continue;
-
-                bepuBehavior.AppendDynamicCollisionBoxes(queryBox, results);
+                behaviour.AppendDynamicCollisionBoxes(queryBox, results);
             }
         }
     }

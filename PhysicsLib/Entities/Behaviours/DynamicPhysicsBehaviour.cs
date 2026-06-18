@@ -1,5 +1,7 @@
 ﻿using PhysicsLib.Api;
+using PhysicsLib.Api.CollisionSource;
 using PhysicsLib.Client;
+using PhysicsLib.patches;
 using System;
 using System.Collections.Generic;
 using System.Numerics;
@@ -32,6 +34,13 @@ namespace PhysicsLib.Entities.Behaviours
         private Quaternion cachedPoseOrientation = Quaternion.Identity;
         private bool cacheValid;
 
+        // Double-precision body position — kept alongside the float version so that
+        // world-space center computation doesn't lose precision at large coordinates.
+        // bodyPosition (float) is only used for rotation/offset math where values are small.
+        private Vec3d bodyPositionD = new Vec3d();
+        private Vec3d previousBodyPositionD = new Vec3d();
+        private Vec3d currentBodyPositionD = new Vec3d();
+
         public Vec3f velocity = new Vec3f();
 
         public DynamicPhysicsBehaviour(Entity entity) : base(entity)
@@ -53,6 +62,8 @@ namespace PhysicsLib.Entities.Behaviours
 
             api = entity.Api;
             physics = api.ModLoader.GetModSystem<PhysicsLibModSystem>();
+
+            (CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource as DynamicCollisionSource)?.Register(this);
 
             var shape = entity.Properties.Client.Shape;
             var shapeLoc = shape.Base.Clone();
@@ -92,6 +103,7 @@ namespace PhysicsLib.Entities.Behaviours
         {
             base.OnEntityDespawn(despawn);
 
+            (CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource as DynamicCollisionSource)?.Unregister(this);
             if (debugRenderer != null && capi != null)
             {
                 capi.Event.UnregisterRenderer(debugRenderer, EnumRenderStage.AfterFinalComposition);
@@ -106,7 +118,7 @@ namespace PhysicsLib.Entities.Behaviours
             if (api == null || !entity.Alive)
                 return;
 
-            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return;
 
             if (!hasPreviousPose)
@@ -115,6 +127,8 @@ namespace PhysicsLib.Entities.Behaviours
                 previousBodyOrientation = bodyOrientation;
                 currentBodyPosition = bodyPosition;
                 currentBodyOrientation = bodyOrientation;
+                previousBodyPositionD.Set(bodyPosD);
+                currentBodyPositionD.Set(bodyPosD);
                 hasPreviousPose = true;
                 velocity.Set(0, 0, 0);
             }
@@ -122,9 +136,11 @@ namespace PhysicsLib.Entities.Behaviours
             {
                 previousBodyPosition = currentBodyPosition;
                 previousBodyOrientation = currentBodyOrientation;
+                previousBodyPositionD.Set(currentBodyPositionD);
 
                 currentBodyPosition = bodyPosition;
                 currentBodyOrientation = bodyOrientation;
+                currentBodyPositionD.Set(bodyPosD);
 
                 Vector3 frameDelta = currentBodyPosition - previousBodyPosition;
 
@@ -142,7 +158,8 @@ namespace PhysicsLib.Entities.Behaviours
                 }
             }
 
-            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyOrientation);
+            bodyPositionD.Set(bodyPosD);
+            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyPosD, bodyOrientation);
         }
 
         public override string PropertyName() => "bepu-physics";
@@ -152,10 +169,10 @@ namespace PhysicsLib.Entities.Behaviours
             if (manualChildBoxes.Count == 0)
                 return;
 
-            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return;
 
-            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyOrientation);
+            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyPosD, bodyOrientation);
 
             for (int i = 0; i < cachedWorldBoxes.Count; i++)
             {
@@ -170,13 +187,17 @@ namespace PhysicsLib.Entities.Behaviours
         {
             localPoint = Vector3.Zero;
 
-            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return false;
 
-            Vector3 p = new Vector3((float)worldPoint.X, (float)worldPoint.Y, (float)worldPoint.Z);
-            Quaternion inv = Quaternion.Inverse(bodyOrientation);
+            // Subtract in double to preserve precision at large world coordinates.
+            Vector3 p = new Vector3(
+                (float)(worldPoint.X - bodyPosD.X),
+                (float)(worldPoint.Y - bodyPosD.Y),
+                (float)(worldPoint.Z - bodyPosD.Z));
 
-            localPoint = Vector3.Transform(p - bodyPosition, inv);
+            Quaternion inv = Quaternion.Inverse(bodyOrientation);
+            localPoint = Vector3.Transform(p, inv);
             return true;
         }
 
@@ -206,10 +227,10 @@ namespace PhysicsLib.Entities.Behaviours
         {
             supportTopY = 0.0;
 
-            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return false;
 
-            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyOrientation);
+            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyPosD, bodyOrientation);
 
             bool found = false;
 
@@ -236,7 +257,7 @@ namespace PhysicsLib.Entities.Behaviours
             return found;
         }
 
-        private void RebuildWorldCollisionCacheIfNeeded(Vector3 bodyPosition, Quaternion bodyOrientation)
+        private void RebuildWorldCollisionCacheIfNeeded(Vector3 bodyPosition, Vec3d bodyPosD, Quaternion bodyOrientation)
         {
             if (cacheValid &&
                 Vector3.DistanceSquared(bodyPosition, cachedPosePosition) < 1e-10f &&
@@ -257,14 +278,26 @@ namespace PhysicsLib.Entities.Behaviours
             {
                 ManualChildBox child = manualChildBoxes[i];
 
-                Vector3 childWorldCenter =
-                    bodyPosition + Vector3.Transform(child.LocalPosition, bodyOrientation);
+                // Compute world center in double to avoid float precision loss at large
+                // world coordinates (~513000). bodyPosD is Vec3d; child.LocalPosition is
+                // a small local offset (safe as float).
+                Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
+                Vec3d childWorldCenterD = new Vec3d(
+                    bodyPosD.X + localOffset.X,
+                    bodyPosD.Y + localOffset.Y,
+                    bodyPosD.Z + localOffset.Z);
+
+                // Float center only used for rotation math — values are small (local offsets).
+                Vector3 childWorldCenter = new Vector3(
+                    (float)childWorldCenterD.X,
+                    (float)childWorldCenterD.Y,
+                    (float)childWorldCenterD.Z);
 
                 Matrix4x4 childLocalRotationMatrix = Matrix4x4.CreateFromQuaternion(child.LocalOrientation);
                 Quaternion childWorldOrientation = ExtractPureRotation(childLocalRotationMatrix * bodyRotationMatrix);
 
                 Cuboidd broadphaseAabb = CreateAabbFromOrientedBox(
-                    childWorldCenter,
+                    childWorldCenterD,
                     childWorldOrientation,
                     child.HalfExtents
                 );
@@ -273,6 +306,7 @@ namespace PhysicsLib.Entities.Behaviours
                 {
                     Box = broadphaseAabb,
                     Center = childWorldCenter,
+                    CenterD = childWorldCenterD,
                     Orientation = childWorldOrientation,
                     HalfExtents = child.HalfExtents,
                     SourceEntity = entity,
@@ -358,26 +392,6 @@ namespace PhysicsLib.Entities.Behaviours
                    MathF.Abs((float)elem.To[2] - (float)elem.From[2]) > 1e-5f;
         }
 
-        /// <summary>
-        /// Builds the local-to-parent matrix for a shape element.
-        ///
-        /// VS shape element rotations interact with System.Numerics row-vector matrix
-        /// convention in a way that depends on the handedness of the parent coordinate frame.
-        /// When an ancestor element has flipped the X axis (e.g. via rotY=180), the parent
-        /// frame's X axis points in the negative direction (parentXSign &lt; 0). In that mirrored
-        /// frame the correct rotation composition order is Rz * Ry * Rx. In a normal frame
-        /// (parentXSign &gt; 0, even number of Y-180 flips in the ancestor chain) it is Rx * Ry * Rz.
-        ///
-        /// Without this distinction, elements that carry their own rotY=180 to mirror themselves
-        /// under an already-flipped ancestor end up with both Y-flips cancelling, producing the
-        /// wrong orientation in world space (the rotation goes the wrong direction).
-        ///
-        /// parentXSign: M11 of the parent world matrix (row 0, col 0 = X component of the
-        ///   parent frame's X axis). Negative = mirrored frame, positive = normal frame.
-        ///
-        /// Empty parents (from == to in any dimension) contribute no box-placement offset:
-        /// their From is substituted with RotationOrigin so T(From-Origin) = identity.
-        /// </summary>
         private static Matrix4x4 CreateVsElementLocalMatrix(ShapeElement elem, float parentXSign)
         {
             float ox = elem.RotationOrigin != null ? (float)elem.RotationOrigin[0] / 16f : 0f;
@@ -393,7 +407,6 @@ namespace PhysicsLib.Entities.Behaviours
             }
             else
             {
-                // Pivot-only element: From == rotationOrigin so T(From-Origin) = identity.
                 fx = ox; fy = oy; fz = oz;
             }
 
@@ -465,9 +478,7 @@ namespace PhysicsLib.Entities.Behaviours
         {
             bool selected = parentSelected || MatchesAnySelector(path);
 
-            // The sign of the parent world X-axis (row 0, col 0) tells us whether we
-            // are in a mirrored coordinate frame (negative = odd number of Y-180 flips).
-            float parentXSign = parentWorld.M11;  // M11 = row 0, col 0
+            float parentXSign = parentWorld.M11;
 
             Matrix4x4 local = CreateVsElementLocalMatrix(elem, parentXSign);
             Matrix4x4 world = local * parentWorld;
@@ -551,7 +562,6 @@ namespace PhysicsLib.Entities.Behaviours
                 if (selector.EndsWith("/*", StringComparison.Ordinal))
                 {
                     string prefix = selector.Substring(0, selector.Length - 2);
-
                     if (path.StartsWith(prefix + "/", StringComparison.Ordinal))
                         return true;
                 }
@@ -559,7 +569,6 @@ namespace PhysicsLib.Entities.Behaviours
                 if (selector.EndsWith("/**", StringComparison.Ordinal))
                 {
                     string prefix = selector.Substring(0, selector.Length - 3);
-
                     if (path == prefix || path.StartsWith(prefix + "/", StringComparison.Ordinal))
                         return true;
                 }
@@ -573,40 +582,17 @@ namespace PhysicsLib.Entities.Behaviours
 
         private static bool WildcardMatch(string text, string pattern)
         {
-            int t = 0;
-            int p = 0;
-            int star = -1;
-            int match = 0;
+            int t = 0, p = 0, star = -1, match = 0;
 
             while (t < text.Length)
             {
-                if (p < pattern.Length && (pattern[p] == '?' || pattern[p] == text[t]))
-                {
-                    t++;
-                    p++;
-                    continue;
-                }
-
-                if (p < pattern.Length && pattern[p] == '*')
-                {
-                    star = p++;
-                    match = t;
-                    continue;
-                }
-
-                if (star != -1)
-                {
-                    p = star + 1;
-                    t = ++match;
-                    continue;
-                }
-
+                if (p < pattern.Length && (pattern[p] == '?' || pattern[p] == text[t])) { t++; p++; continue; }
+                if (p < pattern.Length && pattern[p] == '*') { star = p++; match = t; continue; }
+                if (star != -1) { p = star + 1; t = ++match; continue; }
                 return false;
             }
 
-            while (p < pattern.Length && pattern[p] == '*')
-                p++;
-
+            while (p < pattern.Length && pattern[p] == '*') p++;
             return p == pattern.Length;
         }
 
@@ -628,9 +614,10 @@ namespace PhysicsLib.Entities.Behaviours
             return weightedSum / totalMass;
         }
 
-        private bool TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation)
+        private bool TryGetCollisionPose(out Vector3 bodyPosition, out Vec3d bodyPositionDouble, out Quaternion bodyOrientation)
         {
             bodyPosition = Vector3.Zero;
+            bodyPositionDouble = new Vec3d();
             bodyOrientation = Quaternion.Identity;
 
             if (entity?.Pos == null)
@@ -647,18 +634,27 @@ namespace PhysicsLib.Entities.Behaviours
 
             bodyOrientation = ExtractPureRotation(correctionMatrix * entityRotationMatrix);
 
-            Vector3 entityOrigin = ToVector3(pos.X, pos.Y, pos.Z);
+            // Keep the anchor correction as a small local float offset, then add to the
+            // double-precision entity origin. This avoids casting pos.X/Y/Z to float.
             Vector3 localAnchorCorrection = new Vector3(-0.5f, 0f, -0.5f);
+            Vector3 localOffset = Vector3.Transform(localAnchorCorrection + localCenterOfMassOffset, bodyOrientation);
 
-            bodyPosition =
-                entityOrigin +
-                Vector3.Transform(localAnchorCorrection + localCenterOfMassOffset, bodyOrientation);
+            bodyPositionDouble.Set(
+                pos.X + localOffset.X,
+                pos.Y + localOffset.Y,
+                pos.Z + localOffset.Z);
+
+            // Float version for rotation math only — values are relative/small elsewhere.
+            bodyPosition = new Vector3(
+                (float)bodyPositionDouble.X,
+                (float)bodyPositionDouble.Y,
+                (float)bodyPositionDouble.Z);
 
             return true;
         }
 
         private static Cuboidd CreateAabbFromOrientedBox(
-            Vector3 center,
+            Vec3d center,
             Quaternion orientation,
             Vector3 halfExtents)
         {
@@ -673,12 +669,8 @@ namespace PhysicsLib.Entities.Behaviours
             );
 
             return new Cuboidd(
-                center.X - extents.X,
-                center.Y - extents.Y,
-                center.Z - extents.Z,
-                center.X + extents.X,
-                center.Y + extents.Y,
-                center.Z + extents.Z
+                center.X - extents.X, center.Y - extents.Y, center.Z - extents.Z,
+                center.X + extents.X, center.Y + extents.Y, center.Z + extents.Z
             );
         }
 
@@ -687,10 +679,10 @@ namespace PhysicsLib.Entities.Behaviours
             if (capi == null || entity == null || !entity.Alive)
                 return;
 
-            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Quaternion bodyOrientation))
+            if (!TryGetCollisionPose(out Vector3 bodyPosition, out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return;
 
-            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyOrientation);
+            RebuildWorldCollisionCacheIfNeeded(bodyPosition, bodyPosD, bodyOrientation);
 
             int color = ColorUtil.ToRgba(255, 0, 255, 0);
 
@@ -714,7 +706,6 @@ namespace PhysicsLib.Entities.Behaviours
                 TransformObbCorner(center, orientation, halfExtents,  1f, -1f, -1f),
                 TransformObbCorner(center, orientation, halfExtents,  1f, -1f,  1f),
                 TransformObbCorner(center, orientation, halfExtents, -1f, -1f,  1f),
-
                 TransformObbCorner(center, orientation, halfExtents, -1f,  1f, -1f),
                 TransformObbCorner(center, orientation, halfExtents,  1f,  1f, -1f),
                 TransformObbCorner(center, orientation, halfExtents,  1f,  1f,  1f),
@@ -725,12 +716,10 @@ namespace PhysicsLib.Entities.Behaviours
             DrawWorldLine(capi, corners[1], corners[2], color);
             DrawWorldLine(capi, corners[2], corners[3], color);
             DrawWorldLine(capi, corners[3], corners[0], color);
-
             DrawWorldLine(capi, corners[4], corners[5], color);
             DrawWorldLine(capi, corners[5], corners[6], color);
             DrawWorldLine(capi, corners[6], corners[7], color);
             DrawWorldLine(capi, corners[7], corners[4], color);
-
             DrawWorldLine(capi, corners[0], corners[4], color);
             DrawWorldLine(capi, corners[1], corners[5], color);
             DrawWorldLine(capi, corners[2], corners[6], color);
@@ -738,21 +727,12 @@ namespace PhysicsLib.Entities.Behaviours
         }
 
         private static Vector3 TransformObbCorner(
-            Vector3 center,
-            Quaternion orientation,
-            Vector3 halfExtents,
-            float sx,
-            float sy,
-            float sz)
+            Vector3 center, Quaternion orientation, Vector3 halfExtents,
+            float sx, float sy, float sz)
         {
             return center + Vector3.Transform(
-                new Vector3(
-                    halfExtents.X * sx,
-                    halfExtents.Y * sy,
-                    halfExtents.Z * sz
-                ),
-                orientation
-            );
+                new Vector3(halfExtents.X * sx, halfExtents.Y * sy, halfExtents.Z * sz),
+                orientation);
         }
 
         private static void DrawWorldLine(ICoreClientAPI capi, Vector3 a, Vector3 b, int color)
@@ -760,19 +740,13 @@ namespace PhysicsLib.Entities.Behaviours
             BlockPos origin = new BlockPos(
                 (int)Math.Floor(a.X),
                 (int)Math.Floor(a.Y),
-                (int)Math.Floor(a.Z)
-            );
+                (int)Math.Floor(a.Z));
 
             capi.Render.RenderLine(
                 origin,
-                (float)(a.X - origin.X),
-                (float)(a.Y - origin.Y),
-                (float)(a.Z - origin.Z),
-                (float)(b.X - origin.X),
-                (float)(b.Y - origin.Y),
-                (float)(b.Z - origin.Z),
-                color
-            );
+                (float)(a.X - origin.X), (float)(a.Y - origin.Y), (float)(a.Z - origin.Z),
+                (float)(b.X - origin.X), (float)(b.Y - origin.Y), (float)(b.Z - origin.Z),
+                color);
         }
     }
 }

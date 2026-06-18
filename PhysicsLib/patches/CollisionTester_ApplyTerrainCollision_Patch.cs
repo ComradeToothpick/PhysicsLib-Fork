@@ -261,13 +261,15 @@ namespace PhysicsLib.patches
             double scx = (probeX1 + probeX2) * 0.5;
             double scz = (probeZ1 + probeZ2) * 0.5;
 
-            Span<Vector3> footSamples = stackalloc Vector3[5]
+            // Store foot samples as doubles — they are world-space coordinates and
+            // must not be converted to float until we subtract the OBB center.
+            Span<(double X, double Y, double Z)> footSamples = stackalloc (double, double, double)[5]
             {
-                new Vector3((float)scx, (float)feetY, (float)scz),
-                new Vector3((float)sx1, (float)feetY, (float)sz1),
-                new Vector3((float)sx1, (float)feetY, (float)sz2),
-                new Vector3((float)sx2, (float)feetY, (float)sz1),
-                new Vector3((float)sx2, (float)feetY, (float)sz2),
+                (scx, feetY, scz),
+                (sx1, feetY, sz1),
+                (sx1, feetY, sz2),
+                (sx2, feetY, sz1),
+                (sx2, feetY, sz2),
             };
 
             SupportCandidate? support = null;
@@ -308,7 +310,12 @@ namespace PhysicsLib.patches
                 // A hit from ANY sample is enough — this is the seam fix.
                 for (int s = 0; s < footSamples.Length; s++)
                 {
-                    Vector3 local = Vector3.Transform(footSamples[s] - dyn.Center, invOri);
+                    // Subtract CenterD (Vec3d) in double before converting to float.
+                    Vector3 relSample = new Vector3(
+                        (float)(footSamples[s].X - dyn.CenterD.X),
+                        (float)(footSamples[s].Y - dyn.CenterD.Y),
+                        (float)(footSamples[s].Z - dyn.CenterD.Z));
+                    Vector3 local = Vector3.Transform(relSample, invOri);
 
                     if (_dbg) entity.World.Logger.Debug(
                         "    sample[{0}] local=({1:F3},{2:F3},{3:F3}) absX={4:F3}/{5:F3} absZ={6:F3}/{7:F3}",
@@ -383,12 +390,11 @@ namespace PhysicsLib.patches
 
             for (int i = 0; i < dynBoxes.Count; i++)
             {
-                // Use a tentative box offset by the motion accumulated so far in this
-                // pass.  Without this, every collider after the first tests against the
-                // original pre-pass position and may falsely see a startOverlap, zeroing
-                // motion and blocking the player when near multiple colliders.
+                // Skip any collider the entity is currently standing on — its top surface
+                // is beneath the feet, so it should only block vertically, not horizontally.
+                if (IsUnderFeet(dynBoxes[i], entityBox)) continue;
+                // Use a tentative box offset by the motion accumulated so far in this pass.
                 Cuboidd tentativeX = OffsetEntityBox(entityBox, motionX, 0.0, 0.0);
-                if (IsFloorOfSupport(dynBoxes[i], resolvedSupport, tentativeX)) continue;
                 EnumPushDirection dir = EnumPushDirection.None;
                 double swept = SweepAxisObbAabb(dynBoxes[i], tentativeX, motionX, 0, ref dir);
                 if (dir == EnumPushDirection.None) continue;
@@ -419,10 +425,8 @@ namespace PhysicsLib.patches
 
             for (int i = 0; i < dynBoxes.Count; i++)
             {
-                // Same tentative-box pattern for Z: offset by current motionZ so each
-                // collider sees the entity's position after previous Z collisions.
+                if (IsUnderFeet(dynBoxes[i], entityBox)) continue;
                 Cuboidd tentativeZ = OffsetEntityBox(entityBox, 0.0, 0.0, motionZ);
-                if (IsFloorOfSupport(dynBoxes[i], resolvedSupport, tentativeZ)) continue;
                 EnumPushDirection dir = EnumPushDirection.None;
                 double swept = SweepAxisObbAabb(dynBoxes[i], tentativeZ, motionZ, 2, ref dir);
                 if (dir == EnumPushDirection.None) continue;
@@ -508,21 +512,19 @@ namespace PhysicsLib.patches
         // Returns true only when the box belongs to our support entity AND the entity's
         // feet are within the normal standing-contact band above the surface.  This
         // stops the deck's own hull colliders from pushing the player sideways.
-        private static bool IsFloorOfSupport(
-            DynamicCollisionBox dynBox,
-            Entity? supportEntity,
-            Cuboidd entityBox)
+        // Returns true if this collider is the floor directly under the entity's feet —
+        // i.e. its top surface is within the normal standing-contact band below Y1.
+        // Used to skip horizontal collision against surfaces the entity stands on.
+        // Entity-agnostic: doesn't matter which entity owns the collider.
+        private static bool IsUnderFeet(DynamicCollisionBox dynBox, Cuboidd entityBox)
         {
-            if (supportEntity == null || dynBox.SourceEntity != supportEntity) return false;
             if (!dynBox.CanSupport) return false;
-
             if (!TryGetSupportTopUnderFeet(entityBox, dynBox, out double topY)) return false;
 
+            // feet above surface (positive delta) = standing on it
+            // feet slightly below surface (small negative delta) = marginal contact
             double delta = entityBox.Y1 - topY;
-            // Only skip horizontal collision when the feet are within the normal
-            // standing band.  If the delta is very negative the player is approaching
-            // from the side and must be stopped.
-            return delta >= -(SupportProbeAbove) && delta <= SupportProbeBelow;
+            return delta >= -SupportProbeBelow && delta <= SupportProbeBelow;
         }
 
         // ── swept AABB vs OBB along one world axis ────────────────────────────────
@@ -618,19 +620,26 @@ namespace PhysicsLib.patches
             double cz = (entityBox.Z1 + entityBox.Z2) * 0.5;
             double fy = entityBox.Y1;   // feet level
 
-            Span<Vector3> samples = stackalloc Vector3[5]
+            // Store samples as double tuples — world-space coords, must not be cast
+            // to float until after subtracting the OBB center.
+            Span<(double X, double Y, double Z)> samples = stackalloc (double, double, double)[5]
             {
-                new Vector3((float)cx, (float)fy, (float)cz),
-                new Vector3((float)x1, (float)fy, (float)z1),
-                new Vector3((float)x1, (float)fy, (float)z2),
-                new Vector3((float)x2, (float)fy, (float)z1),
-                new Vector3((float)x2, (float)fy, (float)z2),
+                (cx, fy, cz),
+                (x1, fy, z1),
+                (x1, fy, z2),
+                (x2, fy, z1),
+                (x2, fy, z2),
             };
 
             bool found = false;
             for (int i = 0; i < samples.Length; i++)
             {
-                Vector3 local = Vector3.Transform(samples[i] - dynBox.Center, invOrientation);
+                // Subtract CenterD (Vec3d) in double, then convert to float for the rotation.
+                Vector3 relSample = new Vector3(
+                    (float)(samples[i].X - dynBox.CenterD.X),
+                    (float)(samples[i].Y - dynBox.CenterD.Y),
+                    (float)(samples[i].Z - dynBox.CenterD.Z));
+                Vector3 local = Vector3.Transform(relSample, invOrientation);
 
                 if (MathF.Abs(local.X) > dynBox.HalfExtents.X + (float)SupportHorizontalPadding) continue;
                 if (MathF.Abs(local.Z) > dynBox.HalfExtents.Z + (float)SupportHorizontalPadding) continue;
@@ -698,11 +707,14 @@ namespace PhysicsLib.patches
 
             Cuboidd q = movingEntityBox.Clone();
             q.X1 += Math.Min(0.0, motionX);
-            q.Y1 += Math.Min(0.0, motionY) - yExtra;
             q.Z1 += Math.Min(0.0, motionZ);
             q.X2 += Math.Max(0.0, motionX);
-            q.Y2 = Math.Max(q.Y1 + stepHeight, q.Y2 + Math.Max(0.0, motionY));
             q.Z2 += Math.Max(0.0, motionZ);
+            // Y2 must be computed before Y1 is modified, otherwise q.Y1 + stepHeight
+            // uses the already-lowered Y1 and can produce a smaller range than intended.
+            q.Y2 = Math.Max(movingEntityBox.Y2 + Math.Max(0.0, motionY),
+                             movingEntityBox.Y1 + stepHeight);
+            q.Y1 += Math.Min(0.0, motionY) - yExtra;
 
             DynamicCollisionSource.CollectCollisionBoxes(movingEntity, q, results);
             return results;
@@ -736,10 +748,11 @@ namespace PhysicsLib.patches
             double ea0 = obb.HalfExtents.X, ea1 = obb.HalfExtents.Y, ea2 = obb.HalfExtents.Z;
             double eb0 = aabbHalfX, eb1 = aabbHalfY, eb2 = aabbHalfZ;
 
-            // Translation vector in double — this is the critical subtraction.
-            double tx = aabbCx - obb.Center.X;
-            double ty = aabbCy - obb.Center.Y;
-            double tz = aabbCz - obb.Center.Z;
+            // Translation vector in double — subtract using CenterD (Vec3d) not Center (Vector3/float)
+            // to avoid precision loss at large world coordinates (~513000).
+            double tx = aabbCx - obb.CenterD.X;
+            double ty = aabbCy - obb.CenterD.Y;
+            double tz = aabbCz - obb.CenterD.Z;
 
             // Project translation onto OBB axes.
             double t0 = tx * ax.X + ty * ax.Y + tz * ax.Z;
@@ -791,12 +804,11 @@ namespace PhysicsLib.patches
         {
             hitFraction = 1.0;
 
-            // Compute center relative to OBB center in double to avoid float precision
-            // loss at large world coordinates. Half-extents are differences so they're fine.
+            // Compute center relative to OBB center in double using CenterD (Vec3d).
             Vector3 movingCenter = new Vector3(
-                (float)((movingAabb.X1 + movingAabb.X2) * 0.5 - staticObb.Center.X),
-                (float)((movingAabb.Y1 + movingAabb.Y2) * 0.5 - staticObb.Center.Y),
-                (float)((movingAabb.Z1 + movingAabb.Z2) * 0.5 - staticObb.Center.Z));
+                (float)((movingAabb.X1 + movingAabb.X2) * 0.5 - staticObb.CenterD.X),
+                (float)((movingAabb.Y1 + movingAabb.Y2) * 0.5 - staticObb.CenterD.Y),
+                (float)((movingAabb.Z1 + movingAabb.Z2) * 0.5 - staticObb.CenterD.Z));
             Vector3 movingHalf = new Vector3(
                 (float)((movingAabb.X2 - movingAabb.X1) * 0.5),
                 (float)((movingAabb.Y2 - movingAabb.Y1) * 0.5),

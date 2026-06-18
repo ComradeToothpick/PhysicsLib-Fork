@@ -16,5 +16,7 @@ namespace PhysicsLib.Api
 
         public Entity SourceEntity = null!;
         public bool CanSupport;
+
+        public Vec3d CenterD;
     }
 }
