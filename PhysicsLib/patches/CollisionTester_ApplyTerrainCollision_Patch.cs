@@ -521,10 +521,13 @@ namespace PhysicsLib.patches
             if (!dynBox.CanSupport) return false;
             if (!TryGetSupportTopUnderFeet(entityBox, dynBox, out double topY)) return false;
 
-            // feet above surface (positive delta) = standing on it
-            // feet slightly below surface (small negative delta) = marginal contact
+            // delta > 0: feet above surface (standing on it)
+            // delta < 0: surface above feet (player about to be snapped up onto it)
+            // We skip horizontal collision in both cases — if the surface is within
+            // SupportSnapUp above the feet it will be snapped onto this frame, so
+            // stopping the player against its edge would prevent them walking onto it.
             double delta = entityBox.Y1 - topY;
-            return delta >= -SupportProbeBelow && delta <= SupportProbeBelow;
+            return delta >= -SupportSnapUp && delta <= SupportProbeBelow;
         }
 
         // ── swept AABB vs OBB along one world axis ────────────────────────────────
@@ -559,10 +562,17 @@ namespace PhysicsLib.patches
             // Already overlapping and moving away — allow, will resolve naturally.
             if (startOverlap && !endOverlap) return motion;
 
-            // Already overlapping and moving further in — stop dead.
-            // (This should be rare; ideally the swept test catches it before it happens.)
+            // Already overlapping and moving further in.
+            // Check whether this is a floor the entity is resting on top of (Y pass
+            // already resolved vertical contact) vs a wall being approached horizontally.
+            // If the entity's feet (entityBox.Y1) are at or above the OBB center Y,
+            // the entity is on top — allow horizontal motion freely.
+            // Otherwise it's a genuine horizontal penetration — stop dead.
             if (startOverlap && endOverlap)
             {
+                if (axis != 1 && entityBox.Y1 >= obb.CenterD.Y)
+                    return motion;  // standing on top of this collider — floor, not wall
+
                 direction = motion > 0.0 ? EnumPushDirection.Positive : EnumPushDirection.Negative;
                 return 0.0;
             }
