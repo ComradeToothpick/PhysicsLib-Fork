@@ -19,7 +19,7 @@ namespace PhysicsLib.Client
         {
             if (behavior.entity?.Alive == true)
             {
-                //behavior.DebugRender((behavior.entity.Api as ICoreClientAPI)!);
+                behavior.DebugRender((behavior.entity.Api as ICoreClientAPI)!);
             }
         }
 
