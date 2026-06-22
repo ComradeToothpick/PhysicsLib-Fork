@@ -33,7 +33,7 @@ namespace PhysicsLib.patches
             DynamicCollisionSource.CollectCollisionBoxes(
                 null!,
                 queryBox,
-                dynamicBoxes
+                ref dynamicBoxes
             );
 
             for (int i = 0; i < dynamicBoxes.Count; i++)

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Numerics;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 
 namespace PhysicsLib.patches
@@ -29,7 +30,7 @@ namespace PhysicsLib.patches
             public DynamicCollisionBox DynamicBox = null!;
             public double TopY;
         }
-
+        
         private static readonly Dictionary<long, SupportState> SupportStates = new();
 
         // ── tuning constants ──────────────────────────────────────────────────────
@@ -42,8 +43,8 @@ namespace PhysicsLib.patches
         // "standing on" a dynamic collider.  Above = feet slightly in the air (step up,
         // bobbing boat).  Below = feet barely inside the surface (resting contact).
         private const double SupportProbeAbove = 0.5;    // scan this far above current feet
-                                                         // large to tolerate client position lag
-                                                         // on fast-moving platforms (boats)
+        // large to tolerate client position lag
+        // on fast-moving platforms (boats)
         private const double SupportProbeBelow = 0.12;   // scan this far below current feet
 
         // Surface must face at least this far upward to be a floor candidate.
@@ -86,7 +87,7 @@ namespace PhysicsLib.patches
         public static void ClearStandingOnEntity(Entity entity)
         {
             if (entity == null) return;
-            SupportStates.Remove(entity.EntityId);
+            if (!SupportStates.Remove(entity.EntityId)) entity.Api.Logger.Event("Failed to removed entity: " + entity.EntityId);
         }
 
         // ── private support state ─────────────────────────────────────────────────
@@ -100,14 +101,17 @@ namespace PhysicsLib.patches
                 LocalAnchorPoint = localAnchorPoint
             };
         }
-
+        //The SupportEntity should be passed to this
         private static Entity? ResolveSupportEntity(Entity entity, out SupportState? supportState)
         {
             supportState = null;
             if (entity == null) return null;
-            if (!SupportStates.TryGetValue(entity.EntityId, out supportState) || supportState == null)
-                return null;
-            return entity.World.GetEntityById(supportState.SupportEntityId);
+            if (SupportStates.TryGetValue(entity.EntityId, out supportState) || supportState != null)
+            {
+                return entity.World.GetEntityById(supportState.SupportEntityId);
+            }
+            //entity.Api.Logger.Event("ResolveSupportEntity failed");//This currently triggers every frame
+            return null;
         }
 
         // ── main collision routine ────────────────────────────────────────────────
@@ -143,18 +147,17 @@ namespace PhysicsLib.patches
             Vec3d carryDelta = Vec3d.Zero;
             if (prevSupport != null && prevSupportPhysics != null && prevSupportState != null)
                 prevSupportPhysics.TryGetPointVelocityDelta(prevSupportState.LocalAnchorPoint, out carryDelta);
-
-            double motionX = entityPos.Motion.X * dtFactor + carryDelta.X;
-            double motionY = entityPos.Motion.Y * dtFactor + carryDelta.Y;
-            double motionZ = entityPos.Motion.Z * dtFactor + carryDelta.Z;
+            double motionX = entityPos.Motion.X * dtFactor + (carryDelta.X)*0.6;//Multiply by 0.6 to match ratio of physics-ticks(30(max))/game-ticks(50)
+            double motionY = entityPos.Motion.Y * dtFactor + (carryDelta.Y)*0.6;
+            double motionZ = entityPos.Motion.Z * dtFactor + (carryDelta.Z)*0.6;
 
             // Small bias so we never sit exactly on a sweep boundary.
             double biasX = motionX > MotionBiasThreshold ? MotionBiasThreshold :
-                           motionX < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
+                motionX < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
             double biasY = motionY > MotionBiasThreshold ? MotionBiasThreshold :
-                           motionY < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
+                motionY < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
             double biasZ = motionZ > MotionBiasThreshold ? MotionBiasThreshold :
-                           motionZ < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
+                motionZ < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
 
             motionX += biasX;
             motionY += biasY;
@@ -263,6 +266,7 @@ namespace PhysicsLib.patches
 
             // Store foot samples as doubles — they are world-space coordinates and
             // must not be converted to float until we subtract the OBB center.
+            //15 doubles per nearby vehicle
             Span<(double X, double Y, double Z)> footSamples = stackalloc (double, double, double)[5]
             {
                 (scx, feetY, scz),
@@ -276,16 +280,19 @@ namespace PhysicsLib.patches
 
             // DEBUG — log every tick while sneaking so we can diagnose seam fall-through
             bool _dbg = entity is EntityPlayer player && player.Controls?.Sneak == true && false;
-            if (_dbg) entity.World.Logger.Debug(
-                "[SupportScan] feetY={0:F4} supportBoxes={1} samples: c=({2:F3},{3:F3}) x1z1=({4:F3},{5:F3})",
-                feetY, supportBoxes.Count, scx, scz, sx1, sz1);
+            if (_dbg)
+                entity.World.Logger.Debug(
+                    "[SupportScan] feetY={0:F4} supportBoxes={1} samples: c=({2:F3},{3:F3}) x1z1=({4:F3},{5:F3})",
+                    feetY, supportBoxes.Count, scx, scz, sx1, sz1);
 
             for (int i = 0; i < supportBoxes.Count; i++)
             {
                 DynamicCollisionBox dyn = supportBoxes[i];
                 if (!dyn.CanSupport || dyn.SourceEntity == null)
                 {
-                    if (_dbg) entity.World.Logger.Debug("  box[{0}] SKIP canSupport={1} hasSource={2}", i, dyn.CanSupport, dyn.SourceEntity != null);
+                    if (_dbg)
+                        entity.World.Logger.Debug("  box[{0}] SKIP canSupport={1} hasSource={2}", i, dyn.CanSupport,
+                            dyn.SourceEntity != null);
                     continue;
                 }
 
@@ -293,7 +300,8 @@ namespace PhysicsLib.patches
                 Vector3 dynUp = SafeNormalize(Vector3.Transform(Vector3.UnitY, dyn.Orientation), Vector3.UnitY);
                 if (dynUp.Y < MinSupportUpY)
                 {
-                    if (_dbg) entity.World.Logger.Debug("  box[{0}] SKIP upY={1:F3} < {2:F3}", i, dynUp.Y, MinSupportUpY);
+                    if (_dbg)
+                        entity.World.Logger.Debug("  box[{0}] SKIP upY={1:F3} < {2:F3}", i, dynUp.Y, MinSupportUpY);
                     continue;
                 }
 
@@ -301,10 +309,11 @@ namespace PhysicsLib.patches
                 float padX = dyn.HalfExtents.X + (float)SupportHorizontalPadding;
                 float padZ = dyn.HalfExtents.Z + (float)SupportHorizontalPadding;
 
-                if (_dbg) entity.World.Logger.Debug(
-                    "  box[{0}] center=({1:F3},{2:F3},{3:F3}) he=({4:F3},{5:F3},{6:F3}) padX={7:F3} padZ={8:F3}",
-                    i, dyn.Center.X, dyn.Center.Y, dyn.Center.Z,
-                    dyn.HalfExtents.X, dyn.HalfExtents.Y, dyn.HalfExtents.Z, padX, padZ);
+                if (_dbg)
+                    entity.World.Logger.Debug(
+                        "  box[{0}] center=({1:F3},{2:F3},{3:F3}) he=({4:F3},{5:F3},{6:F3}) padX={7:F3} padZ={8:F3}",
+                        i, dyn.Center.X, dyn.Center.Y, dyn.Center.Z,
+                        dyn.HalfExtents.X, dyn.HalfExtents.Y, dyn.HalfExtents.Z, padX, padZ);
 
                 // Test each foot sample against this box independently.
                 // A hit from ANY sample is enough — this is the seam fix.
@@ -317,9 +326,10 @@ namespace PhysicsLib.patches
                         (float)(footSamples[s].Z - dyn.CenterD.Z));
                     Vector3 local = Vector3.Transform(relSample, invOri);
 
-                    if (_dbg) entity.World.Logger.Debug(
-                        "    sample[{0}] local=({1:F3},{2:F3},{3:F3}) absX={4:F3}/{5:F3} absZ={6:F3}/{7:F3}",
-                        s, local.X, local.Y, local.Z, MathF.Abs(local.X), padX, MathF.Abs(local.Z), padZ);
+                    if (_dbg)
+                        entity.World.Logger.Debug(
+                            "    sample[{0}] local=({1:F3},{2:F3},{3:F3}) absX={4:F3}/{5:F3} absZ={6:F3}/{7:F3}",
+                            s, local.X, local.Y, local.Z, MathF.Abs(local.X), padX, MathF.Abs(local.Z), padZ);
 
                     if (MathF.Abs(local.X) > padX) continue;
                     if (MathF.Abs(local.Z) > padZ) continue;
@@ -330,21 +340,24 @@ namespace PhysicsLib.patches
                     double topY = topWorld.Y;
                     double delta = feetY - topY;
 
-                    if (_dbg) entity.World.Logger.Debug(
-                        "    sample[{0}] HIT topY={1:F4} delta={2:F4} window=[{3:F4}..{4:F4}]",
-                        s, topY, delta, -SupportProbeAbove, SupportProbeBelow);
+                    if (_dbg)
+                        entity.World.Logger.Debug(
+                            "    sample[{0}] HIT topY={1:F4} delta={2:F4} window=[{3:F4}..{4:F4}]",
+                            s, topY, delta, -SupportProbeAbove, SupportProbeBelow);
 
                     if (delta < -SupportProbeAbove || delta > SupportProbeBelow) continue;
 
                     if (support == null || topY > support.TopY)
-                        support = new SupportCandidate { SupportEntity = dyn.SourceEntity, DynamicBox = dyn, TopY = topY };
+                        support = new SupportCandidate
+                            { SupportEntity = dyn.SourceEntity, DynamicBox = dyn, TopY = topY };
 
                     break; // one hit per box is enough; move to the next box
                 }
             }
 
-            if (_dbg) entity.World.Logger.Debug(
-                "[SupportScan] result={0}", support != null ? $"topY={support.TopY:F4}" : "NULL — will fall");
+            if (_dbg)
+                entity.World.Logger.Debug(
+                    "[SupportScan] result={0}", support != null ? $"topY={support.TopY:F4}" : "NULL — will fall");
 
             // Snap feet to the surface and record support.
             if (support != null)
@@ -449,7 +462,7 @@ namespace PhysicsLib.patches
             double finalY = pos.Y + motionY;
             double finalZ = pos.Z + motionZ;
 
-            if (support != null)
+            if (resolvedSupport != null)
             {
                 Cuboidd finalBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
                 Vec3d feetCenter = new Vec3d(
@@ -458,12 +471,12 @@ namespace PhysicsLib.patches
                     (finalBox.Z1 + finalBox.Z2) * 0.5);
 
                 DynamicPhysicsBehaviour? supportPhysics =
-                    support.SupportEntity.GetBehavior<DynamicPhysicsBehaviour>();
+                    support?.SupportEntity.GetBehavior<DynamicPhysicsBehaviour>();
 
                 if (supportPhysics != null &&
                     supportPhysics.TryTransformWorldPointToLocal(feetCenter, out Vector3 localAnchor))
                 {
-                    SetStandingOnEntity(entity, support.SupportEntity, localAnchor);
+                    SetStandingOnEntity(entity, resolvedSupport, localAnchor);
                     entity.OnGround = true;
                 }
                 else
@@ -487,24 +500,27 @@ namespace PhysicsLib.patches
                     if (prevSupportPhysics.TryGetPointVelocityDelta(retainedAnchor, out _))
                     {
                         SetStandingOnEntity(entity, prevSupport, retainedAnchor);
+                        //entity.Api.Logger.Event("a");
                         // Don't set OnGround — we're not confirmed on the surface this frame,
                         // just preventing carryDelta from dropping to zero.
                     }
                     else
                     {
                         ClearStandingOnEntity(entity);
+                        //entity.Api.Logger.Event("b");
                     }
                 }
                 else
                 {
                     ClearStandingOnEntity(entity);
+                    //entity.Api.Logger.Event("c");
                 }
             }
-            else
+            else if (prevSupport != null)
             {
                 ClearStandingOnEntity(entity);
+                //entity.Api.Logger.Event("d");
             }
-
             newPosition.Set(finalX, finalY, finalZ);
         }
 
@@ -635,8 +651,8 @@ namespace PhysicsLib.patches
                 Vector3 axis = worldAxes[i];
 
                 double aabbCenterProj = axis.X * ((aabb.X1 + aabb.X2) * 0.5)
-                                      + axis.Y * ((aabb.Y1 + aabb.Y2) * 0.5)
-                                      + axis.Z * ((aabb.Z1 + aabb.Z2) * 0.5);
+                                        + axis.Y * ((aabb.Y1 + aabb.Y2) * 0.5)
+                                        + axis.Z * ((aabb.Z1 + aabb.Z2) * 0.5);
                 double aabbR = Math.Abs(axis.X) * aabbHalf.X + Math.Abs(axis.Y) * aabbHalf.Y + Math.Abs(axis.Z) * aabbHalf.Z;
 
                 double obbCenterProj = axis.X * obb.CenterD.X + axis.Y * obb.CenterD.Y + axis.Z * obb.CenterD.Z;
@@ -777,10 +793,10 @@ namespace PhysicsLib.patches
             // Y2 must be computed before Y1 is modified, otherwise q.Y1 + stepHeight
             // uses the already-lowered Y1 and can produce a smaller range than intended.
             q.Y2 = Math.Max(movingEntityBox.Y2 + Math.Max(0.0, motionY),
-                             movingEntityBox.Y1 + stepHeight);
+                movingEntityBox.Y1 + stepHeight);
             q.Y1 += Math.Min(0.0, motionY) - yExtra;
 
-            DynamicCollisionSource.CollectCollisionBoxes(movingEntity, q, results);
+            DynamicCollisionSource.CollectCollisionBoxes(movingEntity, q, ref results);
             return results;
         }
 
@@ -901,15 +917,15 @@ namespace PhysicsLib.patches
                     return false;
 
             for (int i = 0; i < 3; i++)
-                for (int j = 0; j < 3; j++)
-                {
-                    Vector3 cross = Vector3.Cross(obbAxes[i], worldAxes[j]);
-                    if (cross.LengthSquared() <= 1e-8f) continue;
-                    cross = Vector3.Normalize(cross);
-                    if (!SweepTestAxis(cross, movingCenter, movingHalf, sweep,
-                            Vector3.Zero, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
-                        return false;
-                }
+            for (int j = 0; j < 3; j++)
+            {
+                Vector3 cross = Vector3.Cross(obbAxes[i], worldAxes[j]);
+                if (cross.LengthSquared() <= 1e-8f) continue;
+                cross = Vector3.Normalize(cross);
+                if (!SweepTestAxis(cross, movingCenter, movingHalf, sweep,
+                        Vector3.Zero, staticObb.HalfExtents, obbAxes, ref enter, ref exit))
+                    return false;
+            }
 
             if (exit < 0.0 || enter > 1.0) return false;
             hitFraction = Math.Clamp(enter, 0.0, 1.0);

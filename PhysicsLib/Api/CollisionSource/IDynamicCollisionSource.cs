@@ -6,6 +6,6 @@ namespace PhysicsLib.Api.CollisionSource
 {
     public interface IDynamicCollisionSource
     {
-        void CollectCollisionBoxes(Entity movingEntity, Cuboidd queryBox, List<DynamicCollisionBox> results);
+        void CollectCollisionBoxes(Entity movingEntity, Cuboidd queryBox, ref List<DynamicCollisionBox> results);
     }
 }

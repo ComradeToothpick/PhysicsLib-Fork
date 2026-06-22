@@ -34,7 +34,7 @@ namespace PhysicsLib.Api.CollisionSource
         public void CollectCollisionBoxes(
             Entity movingEntity,
             Cuboidd queryBox,
-            List<DynamicCollisionBox> results)
+            ref List<DynamicCollisionBox> results)
         {
             for (int i = registeredBehaviours.Count - 1; i >= 0; i--)
             {
@@ -49,7 +49,7 @@ namespace PhysicsLib.Api.CollisionSource
                 if (movingEntity != null && behaviour.entity.EntityId == movingEntity.EntityId)
                     continue;
 
-                behaviour.AppendDynamicCollisionBoxes(queryBox, results);
+                behaviour.AppendDynamicCollisionBoxes(queryBox, ref results);
             }
         }
     }

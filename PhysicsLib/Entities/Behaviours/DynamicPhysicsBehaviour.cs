@@ -56,12 +56,26 @@ namespace PhysicsLib.Entities.Behaviours
 
             (CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource as DynamicCollisionSource)
                 ?.Register(this);
+            BuiltCompound? cachedShape;
+            AssetLocation shapeLoc;
+            if (entity is EntityChunky)
+            {
+                var shape = Block.DefaultCubeShape;//A more rigorous solution will be needed once more blocks are involved
+                //will also need to find a solution for blocks that are not full cubes i.e. stairs, chiseled blocks etc.
+                shapeLoc = shape.Base.Clone();
+                shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
+                
+                cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
+            }
+            else
+            {
+                var shape = entity.Properties.Client.Shape;
+                shapeLoc = shape.Base.Clone();
+                shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
 
-            var shape = entity.Properties.Client.Shape;
-            var shapeLoc = shape.Base.Clone();
-            shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
-
-            BuiltCompound? cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
+                cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
+            }
+            
 
             if (cachedShape == null)
             {
@@ -144,7 +158,7 @@ namespace PhysicsLib.Entities.Behaviours
 
         // Called by DynamicCollisionSource for each registered behaviour.
         // Transforms the shared local boxes to world space on the fly — no cached world list.
-        public void AppendDynamicCollisionBoxes(Cuboidd queryBox, List<DynamicCollisionBox> results)
+        public void AppendDynamicCollisionBoxes(Cuboidd queryBox, ref List<DynamicCollisionBox> results)
         {
             if (manualChildBoxes.Count == 0) return;
 
