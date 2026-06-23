@@ -60,11 +60,7 @@ namespace PhysicsLib.Entities.Behaviours
             AssetLocation shapeLoc;
             if (entity is EntityChunky)
             {
-                var shape = Block.DefaultCubeShape;//A more rigorous solution will be needed once more blocks are involved
-                //will also need to find a solution for blocks that are not full cubes i.e. stairs, chiseled blocks etc.
-                shapeLoc = shape.Base.Clone();
-                shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
-                
+                HandleEntityChunky(entity, out shapeLoc);//Do this so that it's easy to harmony patch
                 cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
             }
             else
@@ -265,6 +261,16 @@ namespace PhysicsLib.Entities.Behaviours
             }
 
             return found;
+        }
+
+        public void HandleEntityChunky(Entity entity, out AssetLocation shapeLoc)
+        {
+            CompositeShape shape;
+            
+            shape = Block.DefaultCubeShape;//A basic solution that can be overwritten with a harmony patch
+            
+            shapeLoc = shape.Base.Clone();
+            shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
         }
 
         // ── shape building (runs once per entity type, result is shared) ──────────
