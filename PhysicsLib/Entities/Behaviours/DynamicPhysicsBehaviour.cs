@@ -23,8 +23,9 @@ namespace PhysicsLib.Entities.Behaviours
         private Vector3 localCenterOfMassOffset;
 
         // Shared across all instances of the same entity type — built once, never mutated.
-        private List<ManualChildBox> manualChildBoxes = new();
-
+        private List<ManualChildBox> manualChildBoxes = new List<ManualChildBox>();
+        public List<ManualChildBox> VehicleChildBoxes = new List<ManualChildBox>();
+        public bool isVehicle = false;
         // Per-instance pose tracking for carry delta.
         private Vec3d previousBodyPositionD = new Vec3d();
         private Vec3d currentBodyPositionD = new Vec3d();
@@ -53,19 +54,28 @@ namespace PhysicsLib.Entities.Behaviours
 
             api = entity.Api;
             physics = api.ModLoader.GetModSystem<PhysicsLibModSystem>();
-
+            AssetLocation shapeLoc = Block.DefaultCubeShape.Base.Clone();//So the compiler stops yelling at me
             (CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource as DynamicCollisionSource)
                 ?.Register(this);
             BuiltCompound? cachedShape;
-            AssetLocation shapeLoc;
             if (entity is EntityChunky)
             {
-                HandleEntityChunky(entity, out shapeLoc);//Do this so that it's easy to harmony patch
-                cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
+                isVehicle = true;
+                HandleEntityChunky(entity, out cachedShape);//Do this so that it's easy to harmony patch
+                if (cachedShape == null)
+                {
+                    api.Logger.Event("cachedShape of EntityChunky is null");
+                    CompositeShape shape = Block.DefaultCubeShape;
+                    shapeLoc = shape.Base.Clone();
+                    shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
+
+                    cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
+                    //isVehicle = false;
+                }
             }
             else
             {
-                var shape = entity.Properties.Client.Shape;
+                CompositeShape shape = entity.Properties.Client.Shape;
                 shapeLoc = shape.Base.Clone();
                 shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
 
@@ -73,7 +83,7 @@ namespace PhysicsLib.Entities.Behaviours
             }
             
 
-            if (cachedShape == null)
+            if (cachedShape == null && !isVehicle)
             {
                 var asset = api.Assets.TryGet(shapeLoc);
                 if (asset == null)
@@ -92,8 +102,15 @@ namespace PhysicsLib.Entities.Behaviours
                 cachedShape = physics.AddCompoundShape(shapeLoc.Path, BuildCompoundFromShape(compoundShape));
             }
 
-            localCenterOfMassOffset = cachedShape.Value.LocalCenterOfMassOffset;
-            manualChildBoxes = cachedShape.Value.ManualChildBoxes;
+            if (isVehicle && cachedShape != null)
+            {
+                VehicleChildBoxes = cachedShape.Value.ManualChildBoxes;
+            }
+            else if (!isVehicle && cachedShape != null)
+            {
+                manualChildBoxes = cachedShape.Value.ManualChildBoxes;
+            }
+            if (cachedShape != null) localCenterOfMassOffset = cachedShape.Value.LocalCenterOfMassOffset;
         }
 
         public override void OnEntityDespawn(EntityDespawnData despawn)
@@ -156,52 +173,116 @@ namespace PhysicsLib.Entities.Behaviours
         // Transforms the shared local boxes to world space on the fly — no cached world list.
         public void AppendDynamicCollisionBoxes(Cuboidd queryBox, ref List<DynamicCollisionBox> results)
         {
-            if (manualChildBoxes.Count == 0) return;
-
-            if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
-                return;
-
-            Matrix4x4 bodyRotationMatrix = Matrix4x4.CreateFromQuaternion(bodyOrientation);
-
-            for (int i = 0; i < manualChildBoxes.Count; i++)
+            if (!isVehicle)
             {
-                ManualChildBox child = manualChildBoxes[i];
+                if (manualChildBoxes.Count == 0) return;
 
-                Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
-                Vec3d worldCenterD = new Vec3d(
-                    bodyPosD.X + localOffset.X,
-                    bodyPosD.Y + localOffset.Y,
-                    bodyPosD.Z + localOffset.Z);
+                if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
+                    return;
 
-                Cuboidd broadphase = CreateAabbFromOrientedBox(
-                    worldCenterD,
-                    bodyOrientation,   // orientation applied below per child
-                    child.HalfExtents);
+                Matrix4x4 bodyRotationMatrix = Matrix4x4.CreateFromQuaternion(bodyOrientation);
 
-                if (!broadphase.IntersectsOrTouches(queryBox)) continue;
-
-                Matrix4x4 childLocalRot = Matrix4x4.CreateFromQuaternion(child.LocalOrientation);
-                Quaternion childWorldOri = ExtractPureRotation(childLocalRot * bodyRotationMatrix);
-
-                // Recompute tighter broadphase with correct child orientation.
-                Cuboidd tightBroadphase = CreateAabbFromOrientedBox(worldCenterD, childWorldOri, child.HalfExtents);
-                if (!tightBroadphase.IntersectsOrTouches(queryBox)) continue;
-
-                Vector3 worldCenter = new Vector3(
-                    (float)worldCenterD.X,
-                    (float)worldCenterD.Y,
-                    (float)worldCenterD.Z);
-
-                results.Add(new DynamicCollisionBox
+                for (int i = 0; i < manualChildBoxes.Count; i++)
                 {
-                    Box = tightBroadphase,
-                    Center = worldCenter,
-                    CenterD = worldCenterD,
-                    Orientation = childWorldOri,
-                    HalfExtents = child.HalfExtents,
-                    SourceEntity = entity,
-                    CanSupport = true
-                });
+                    ManualChildBox child = manualChildBoxes[i];
+
+                    Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
+                    Vec3d worldCenterD = new Vec3d(
+                        bodyPosD.X + localOffset.X,
+                        bodyPosD.Y + localOffset.Y,
+                        bodyPosD.Z + localOffset.Z);
+
+                    Cuboidd broadphase = CreateAabbFromOrientedBox(
+                        worldCenterD,
+                        bodyOrientation, // orientation applied below per child
+                        child.HalfExtents);
+
+                    if (!broadphase.IntersectsOrTouches(queryBox)) continue;
+                    
+
+                    Matrix4x4 childLocalRot = Matrix4x4.CreateFromQuaternion(child.LocalOrientation);
+                    Quaternion childWorldOri = ExtractPureRotation(childLocalRot * bodyRotationMatrix);
+
+                    // Recompute tighter broadphase with correct child orientation.
+                    Cuboidd tightBroadphase = CreateAabbFromOrientedBox(worldCenterD, childWorldOri, child.HalfExtents);
+                    if (!tightBroadphase.IntersectsOrTouches(queryBox)) continue;
+                    
+
+                    Vector3 worldCenter = new Vector3(
+                        (float)worldCenterD.X,
+                        (float)worldCenterD.Y,
+                        (float)worldCenterD.Z);
+
+                    results.Add(new DynamicCollisionBox
+                    {
+                        Box = tightBroadphase,
+                        Center = worldCenter,
+                        CenterD = worldCenterD,
+                        Orientation = childWorldOri,
+                        HalfExtents = child.HalfExtents,
+                        SourceEntity = entity,
+                        CanSupport = true
+                    });
+                }
+            }
+            else
+            {
+                if (VehicleChildBoxes == null)
+                {
+                    //entity.Api.Logger.Event("[physicslib] VehicleChildBoxes is null");
+                    //HandleEntityChunky(entity, out BuiltCompound? cachedShape);
+                    //VehicleChildBoxes = cachedShape.Value.ManualChildBoxes;
+                    
+                    entity.Api.Logger.Event("[physicslib] VehicleChildBoxes is null. Aborting");
+                    return;
+                }
+
+                if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
+                {
+                    entity.Api.Logger.Event("[physicslib] Failed to get Collision Pose");
+                    return;
+                }
+                
+                Matrix4x4 bodyRotationMatrix = Matrix4x4.CreateFromQuaternion(bodyOrientation);
+
+                foreach (ManualChildBox child in VehicleChildBoxes)
+                {
+                    Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
+                    Vec3d worldCenterD = new Vec3d(
+                        bodyPosD.X + localOffset.X,
+                        bodyPosD.Y + localOffset.Y,
+                        bodyPosD.Z + localOffset.Z);
+
+                    Cuboidd broadphase = CreateAabbFromOrientedBox(
+                        worldCenterD,
+                        bodyOrientation, // orientation applied below per child
+                        child.HalfExtents);
+
+                    if (!broadphase.IntersectsOrTouches(queryBox)) continue;
+                    
+                    Matrix4x4 childLocalRot = Matrix4x4.CreateFromQuaternion(child.LocalOrientation);
+                    Quaternion childWorldOri = ExtractPureRotation(childLocalRot * bodyRotationMatrix);
+
+                    // Recompute tighter broadphase with correct child orientation.
+                    Cuboidd tightBroadphase = CreateAabbFromOrientedBox(worldCenterD, childWorldOri, child.HalfExtents);
+                    if (!tightBroadphase.IntersectsOrTouches(queryBox)) continue;
+                    
+                    Vector3 worldCenter = new Vector3(
+                        (float)worldCenterD.X,
+                        (float)worldCenterD.Y,
+                        (float)worldCenterD.Z);
+
+                    results.Add(new DynamicCollisionBox
+                    {
+                        Box = tightBroadphase,
+                        Center = worldCenter,
+                        CenterD = worldCenterD,
+                        Orientation = childWorldOri,
+                        HalfExtents = child.HalfExtents,
+                        SourceEntity = entity,
+                        CanSupport = true
+                    });
+                }
             }
         }
 
@@ -263,14 +344,15 @@ namespace PhysicsLib.Entities.Behaviours
             return found;
         }
 
-        public void HandleEntityChunky(Entity entity, out AssetLocation shapeLoc)
+        public void HandleEntityChunky(Entity entity, out BuiltCompound? cachedShape)
         {
             CompositeShape shape;
-            
+            entity.Api.Logger.Event("Default EntityChunky executing");
             shape = Block.DefaultCubeShape;//A basic solution that can be overwritten with a harmony patch
             
-            shapeLoc = shape.Base.Clone();
+            AssetLocation shapeLoc = shape.Base.Clone();
             shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
+            cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
         }
 
         // ── shape building (runs once per entity type, result is shared) ──────────

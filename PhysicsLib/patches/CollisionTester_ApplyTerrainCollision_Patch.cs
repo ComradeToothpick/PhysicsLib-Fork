@@ -500,26 +500,22 @@ namespace PhysicsLib.patches
                     if (prevSupportPhysics.TryGetPointVelocityDelta(retainedAnchor, out _))
                     {
                         SetStandingOnEntity(entity, prevSupport, retainedAnchor);
-                        //entity.Api.Logger.Event("a");
                         // Don't set OnGround — we're not confirmed on the surface this frame,
                         // just preventing carryDelta from dropping to zero.
                     }
                     else
                     {
                         ClearStandingOnEntity(entity);
-                        //entity.Api.Logger.Event("b");
                     }
                 }
                 else
                 {
                     ClearStandingOnEntity(entity);
-                    //entity.Api.Logger.Event("c");
                 }
             }
             else if (prevSupport != null)
             {
                 ClearStandingOnEntity(entity);
-                //entity.Api.Logger.Event("d");
             }
             newPosition.Set(finalX, finalY, finalZ);
         }
