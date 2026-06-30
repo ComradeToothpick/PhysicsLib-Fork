@@ -63,6 +63,9 @@ namespace PhysicsLib.patches
         // A tiny gap left between the entity and surfaces after a sweep so we never
         // land exactly flush (avoids re-triggering the sweep the next frame).
         private const double SweepSkin = 0.001;
+        
+        //Multiply by 0.6 to match ratio of physics-ticks(30(max))/game-ticks(50)
+        private const double carryDeltaMult = 0.6;
 
         // ── harmony entry point ───────────────────────────────────────────────────
 
@@ -147,9 +150,9 @@ namespace PhysicsLib.patches
             Vec3d carryDelta = Vec3d.Zero;
             if (prevSupport != null && prevSupportPhysics != null && prevSupportState != null)
                 prevSupportPhysics.TryGetPointVelocityDelta(prevSupportState.LocalAnchorPoint, out carryDelta);
-            double motionX = entityPos.Motion.X * dtFactor + (carryDelta.X)*0.6;//Multiply by 0.6 to match ratio of physics-ticks(30(max))/game-ticks(50)
-            double motionY = entityPos.Motion.Y * dtFactor + (carryDelta.Y)*0.6;
-            double motionZ = entityPos.Motion.Z * dtFactor + (carryDelta.Z)*0.6;
+            double motionX = entityPos.Motion.X * dtFactor + (carryDelta.X)*carryDeltaMult;
+            double motionY = entityPos.Motion.Y * dtFactor + (carryDelta.Y)*carryDeltaMult;
+            double motionZ = entityPos.Motion.Z * dtFactor + (carryDelta.Z)*carryDeltaMult;
 
             // Small bias so we never sit exactly on a sweep boundary.
             double biasX = motionX > MotionBiasThreshold ? MotionBiasThreshold :

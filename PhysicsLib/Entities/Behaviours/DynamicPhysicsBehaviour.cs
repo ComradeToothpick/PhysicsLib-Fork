@@ -167,7 +167,7 @@ namespace PhysicsLib.Entities.Behaviours
             }
         }
 
-        public override string PropertyName() => "bepu-physics";
+        public override string PropertyName() => "dynamic-physics";
 
         // Called by DynamicCollisionSource for each registered behaviour.
         // Transforms the shared local boxes to world space on the fly — no cached world list.

@@ -4,9 +4,7 @@
     "modid": "physicslib",
     "name": "PhysicsLib",
     "authors": [
-        "Davis99"
-    ],
-    "contributors": [
+        "Davis99",
         "Comrade_Toothpik"
     ],
     "description": "This library reads shape files for entities and turns the cuboids into colliders you can stand on.",

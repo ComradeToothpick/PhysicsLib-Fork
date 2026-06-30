@@ -26,18 +26,15 @@ namespace PhysicsLib
             var dynamicSource = new DynamicCollisionSource(api);
             CollisionTester_ApplyTerrainCollision_Patch.DynamicCollisionSource = dynamicSource;
             CollisionTester_IsColliding_Patch.DynamicCollisionSource = dynamicSource;
-            Mod.Logger.Notification("Hello from template mod: " + api.Side);
             api.RegisterEntityBehaviorClass("dynamic-physics", typeof(DynamicPhysicsBehaviour));
         }
 
         public override void StartServerSide(ICoreServerAPI api)
         {
-            Mod.Logger.Notification("Hello from template mod server side: " + Lang.Get("physicslib:hello"));
         }
 
         public override void StartClientSide(ICoreClientAPI api)
         {
-            Mod.Logger.Notification("Hello from template mod client side: " + Lang.Get("physicslib:hello"));
         }
 
 
