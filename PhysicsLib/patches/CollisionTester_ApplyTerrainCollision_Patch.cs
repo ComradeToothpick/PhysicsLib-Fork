@@ -22,6 +22,7 @@ namespace PhysicsLib.patches
         {
             public long SupportEntityId;
             public Vector3 LocalAnchorPoint;
+            public Vec3d AnchorWorld;
         }
 
         private sealed class SupportCandidate
@@ -63,15 +64,11 @@ namespace PhysicsLib.patches
         // A tiny gap left between the entity and surfaces after a sweep so we never
         // land exactly flush (avoids re-triggering the sweep the next frame).
         private const double SweepSkin = 0.001;
-        
-        //Multiply by 0.6 to match ratio of physics-ticks(30(max))/game-ticks(50)
-        private const double carryDeltaMult = 0.6;
 
         // ── harmony entry point ───────────────────────────────────────────────────
 
-        [HarmonyPrefix]
-        public static bool Prefix(
-            CollisionTester __instance,
+        [HarmonyPostfix]
+        public static void Postfix(
             Entity entity,
             EntityPos entityPos,
             float dtFactor,
@@ -80,9 +77,8 @@ namespace PhysicsLib.patches
             float yExtra = 1f)
         {
             ApplyTerrainAndDynamicCollision(
-                __instance, entity, entityPos, dtFactor,
+                entity, entityPos, dtFactor,
                 ref newPosition, stepHeight, yExtra);
-            return false;
         }
 
         // ── public support helpers ────────────────────────────────────────────────
@@ -95,16 +91,17 @@ namespace PhysicsLib.patches
 
         // ── private support state ─────────────────────────────────────────────────
 
-        private static void SetStandingOnEntity(Entity entity, Entity supportEntity, Vector3 localAnchorPoint)
+        private static void SetStandingOnEntity(Entity entity, Entity supportEntity, Vector3 localAnchorPoint, Vec3d anchorWorld)
         {
             if (entity == null || supportEntity == null) return;
             SupportStates[entity.EntityId] = new SupportState
             {
                 SupportEntityId = supportEntity.EntityId,
-                LocalAnchorPoint = localAnchorPoint
+                LocalAnchorPoint = localAnchorPoint,
+                AnchorWorld = anchorWorld
             };
         }
-        //The SupportEntity should be passed to this
+        
         private static Entity? ResolveSupportEntity(Entity entity, out SupportState? supportState)
         {
             supportState = null;
@@ -120,7 +117,6 @@ namespace PhysicsLib.patches
         // ── main collision routine ────────────────────────────────────────────────
 
         private static void ApplyTerrainAndDynamicCollision(
-            CollisionTester tester,
             Entity entity,
             EntityPos entityPos,
             float dtFactor,
@@ -128,32 +124,40 @@ namespace PhysicsLib.patches
             float stepHeight,
             float yExtra)
         {
-            tester.minPos.dimension = entityPos.Dimension;
-
-            IWorldAccessor world = entity.World;
-            Vec3d pos = tester.pos;
-            Cuboidd entityBox = tester.entityBox;
-            BlockPos collBlockPos = new BlockPos(entityPos.Dimension);
-
-            pos.X = entityPos.X;
-            pos.Y = entityPos.Y;
-            pos.Z = entityPos.Z;
-
-            entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
-
+            Vec3d start = new Vec3d(entityPos);
+            Cuboidd entityBox = entity.CollisionBox.ToDouble();
+            EntityPlayer player = null;
+            if (entity is EntityPlayer)
+                player = (EntityPlayer)entity;
+            //This approach seems to eliminate the slipping associated with the jitter.
+            //The jitter however, persists
+            double motionX = newPosition.X - start.X;
+            double motionY = newPosition.Y - start.Y;
+            double motionZ = newPosition.Z - start.Z;
+            //if (entity is EntityPlayer player3 && player3.Controls.TriesToMove)
+            //{
+                
+            //}
+            
+            
             // ── carry delta from standing on a moving entity ──────────────────────
             // We apply the support platform's movement to this frame's motion so the
             // player moves with the boat without a one-frame lag.
+            Vec3d carry = Vec3d.Zero;
             Entity? prevSupport = ResolveSupportEntity(entity, out SupportState? prevSupportState);
-            DynamicPhysicsBehaviour? prevSupportPhysics = prevSupport?.GetBehavior<DynamicPhysicsBehaviour>();
-
-            Vec3d carryDelta = Vec3d.Zero;
-            if (prevSupport != null && prevSupportPhysics != null && prevSupportState != null)
-                prevSupportPhysics.TryGetPointVelocityDelta(prevSupportState.LocalAnchorPoint, out carryDelta);
-            double motionX = entityPos.Motion.X * dtFactor + (carryDelta.X)*carryDeltaMult;
-            double motionY = entityPos.Motion.Y * dtFactor + (carryDelta.Y)*carryDeltaMult;
-            double motionZ = entityPos.Motion.Z * dtFactor + (carryDelta.Z)*carryDeltaMult;
-
+            DynamicPhysicsBehaviour? prevSupportBody = null;
+            if (prevSupport != null)
+            {
+                prevSupport = entity.World.GetEntityById(prevSupportState!.SupportEntityId);
+                prevSupportBody = prevSupport?.GetBehavior<DynamicPhysicsBehaviour>();
+                if (prevSupportBody != null && prevSupportBody.TryLocalToWorld(prevSupportState.LocalAnchorPoint, out Vec3d anchorNow))
+                    carry.Set(anchorNow.X - prevSupportState.AnchorWorld.X,
+                        anchorNow.Y - prevSupportState.AnchorWorld.Y,
+                        anchorNow.Z - prevSupportState.AnchorWorld.Z);
+            }
+            Vec3d cstart = new(start.X + carry.X, start.Y + carry.Y, start.Z + carry.Z);
+            
+            //Don't know how important this is yet, will leave as is for now
             // Small bias so we never sit exactly on a sweep boundary.
             double biasX = motionX > MotionBiasThreshold ? MotionBiasThreshold :
                 motionX < -MotionBiasThreshold ? -MotionBiasThreshold : 0.0;
@@ -165,48 +169,25 @@ namespace PhysicsLib.patches
             motionX += biasX;
             motionY += biasY;
             motionZ += biasZ;
-
-            // ── collect collision geometry ────────────────────────────────────────
-            GenerateTerrainCollisionBoxList(
-                tester, world.BlockAccessor,
-                motionX, motionY, motionZ,
-                stepHeight, yExtra, entityPos.Dimension);
-
+            entityBox.Translate(cstart.X, cstart.Y, cstart.Z);
+            
             List<DynamicCollisionBox> dynBoxes = CollectDynamicCollisionBoxes(
                 entity, entityPos.Dimension, entityBox,
                 motionX, motionY, motionZ, stepHeight, yExtra);
-
-            int terrainCount = tester.CollisionBoxList.Count;
-            Cuboidd[] terrainBoxes = tester.CollisionBoxList.cuboids;
-
-            bool collidedV = false;
-            bool collidedH = false;
+            
+            bool collidedV = entity.CollidedVertically;
+            bool collidedH = entity.CollidedHorizontally;
 
             // ════════════════════════════════════════════════════════════════════════
             // Y PASS — resolve vertical motion against terrain then dynamic colliders
             // ════════════════════════════════════════════════════════════════════════
-
-            for (int i = 0; i < terrainCount && i < terrainBoxes.Length; i++)
-            {
-                EnumPushDirection dir = EnumPushDirection.None;
-                motionY = terrainBoxes[i].pushOutY(entityBox, motionY, ref dir);
-                if (dir == EnumPushDirection.None) continue;
-
-                collidedV = true;
-                collBlockPos.Set(tester.CollisionBoxList.positions[i]);
-                tester.CollisionBoxList.blocks[i].OnEntityCollide(
-                    world, entity, collBlockPos,
-                    dir == EnumPushDirection.Negative ? BlockFacing.UP : BlockFacing.DOWN,
-                    tester.tmpPosDelta.Set(motionX, motionY, motionZ),
-                    !entity.CollidedVertically);
-            }
-
+            
             for (int i = 0; i < dynBoxes.Count; i++)
             {
                 EnumPushDirection dir = EnumPushDirection.None;
                 double swept = SweepAxisObbAabb(dynBoxes[i], entityBox, motionY, 1, ref dir);
                 if (dir == EnumPushDirection.None) continue;
-                motionY = swept;
+                motionY = swept; 
                 collidedV = true;
             }
 
@@ -229,7 +210,7 @@ namespace PhysicsLib.patches
             // We use pos.Y + unbiased motionY rather than entityBox.Y1 because on a moving
             // platform the client's entityPos lags the server — but that lag is already
             // compensated by carryDelta which is added to motionY above.
-            double feetY = pos.Y + (motionY - biasY);
+            double feetY = cstart.Y + (motionY - biasY);
 
             // Probe box: a thin slab centred on the XZ position of the entity,
             // spanning [feetY - SupportProbeBelow .. feetY + SupportProbeAbove].
@@ -282,7 +263,7 @@ namespace PhysicsLib.patches
             SupportCandidate? support = null;
 
             // DEBUG — log every tick while sneaking so we can diagnose seam fall-through
-            bool _dbg = entity is EntityPlayer player && player.Controls?.Sneak == true && false;
+            bool _dbg = player != null && player.Controls?.Sneak == true && false;
             if (_dbg)
                 entity.World.Logger.Debug(
                     "[SupportScan] feetY={0:F4} supportBoxes={1} samples: c=({2:F3},{3:F3}) x1z1=({4:F3},{5:F3})",
@@ -389,21 +370,6 @@ namespace PhysicsLib.patches
             // in the horizontal passes (so standing on deck doesn't push you sideways).
             Entity? resolvedSupport = support?.SupportEntity ?? prevSupport;
 
-            for (int i = 0; i < terrainCount && i < terrainBoxes.Length; i++)
-            {
-                EnumPushDirection dir = EnumPushDirection.None;
-                motionX = terrainBoxes[i].pushOutX(entityBox, motionX, ref dir);
-                if (dir == EnumPushDirection.None) continue;
-
-                collidedH = true;
-                collBlockPos.Set(tester.CollisionBoxList.positions[i]);
-                tester.CollisionBoxList.blocks[i].OnEntityCollide(
-                    world, entity, collBlockPos,
-                    dir == EnumPushDirection.Negative ? BlockFacing.EAST : BlockFacing.WEST,
-                    tester.tmpPosDelta.Set(motionX, motionY, motionZ),
-                    !entity.CollidedHorizontally);
-            }
-
             for (int i = 0; i < dynBoxes.Count; i++)
             {
                 // Skip any collider the entity is currently standing on — its top surface
@@ -423,22 +389,7 @@ namespace PhysicsLib.patches
             // ════════════════════════════════════════════════════════════════════════
             // Z PASS
             // ════════════════════════════════════════════════════════════════════════
-
-            for (int i = 0; i < terrainCount && i < terrainBoxes.Length; i++)
-            {
-                EnumPushDirection dir = EnumPushDirection.None;
-                motionZ = terrainBoxes[i].pushOutZ(entityBox, motionZ, ref dir);
-                if (dir == EnumPushDirection.None) continue;
-
-                collidedH = true;
-                collBlockPos.Set(tester.CollisionBoxList.positions[i]);
-                tester.CollisionBoxList.blocks[i].OnEntityCollide(
-                    world, entity, collBlockPos,
-                    dir == EnumPushDirection.Negative ? BlockFacing.SOUTH : BlockFacing.NORTH,
-                    tester.tmpPosDelta.Set(motionX, motionY, motionZ),
-                    !entity.CollidedHorizontally);
-            }
-
+            
             for (int i = 0; i < dynBoxes.Count; i++)
             {
                 if (IsUnderFeet(dynBoxes[i], entityBox)) continue;
@@ -461,10 +412,11 @@ namespace PhysicsLib.patches
                 motionY -= entity.LadderFixDelta;
 
             // ── finalise position and support state ───────────────────────────────
-            double finalX = pos.X + motionX;
-            double finalY = pos.Y + motionY;
-            double finalZ = pos.Z + motionZ;
-
+            double finalX = cstart.X + motionX;
+            double finalY = cstart.Y + motionY;
+            double finalZ = cstart.Z + motionZ;
+            
+            newPosition.Set(finalX, finalY, finalZ);
             if (resolvedSupport != null)
             {
                 Cuboidd finalBox = entity.CollisionBox.ToDouble().OffsetCopy(finalX, finalY, finalZ);
@@ -477,9 +429,9 @@ namespace PhysicsLib.patches
                     support?.SupportEntity.GetBehavior<DynamicPhysicsBehaviour>();
 
                 if (supportPhysics != null &&
-                    supportPhysics.TryTransformWorldPointToLocal(feetCenter, out Vector3 localAnchor))
+                    supportPhysics.TryWorldToLocal(feetCenter, out Vector3 localAnchor))
                 {
-                    SetStandingOnEntity(entity, resolvedSupport, localAnchor);
+                    SetStandingOnEntity(entity, resolvedSupport, localAnchor, feetCenter);
                     entity.OnGround = true;
                 }
                 else
@@ -487,7 +439,7 @@ namespace PhysicsLib.patches
                     ClearStandingOnEntity(entity);
                 }
             }
-            else if (prevSupport != null && prevSupportPhysics != null && prevSupportState != null)
+            else if (prevSupport != null && prevSupportBody != null && prevSupportState != null)
             {
                 // No support found this frame, but we had one last frame.
                 // This happens when the client position lags behind a moving platform —
@@ -496,13 +448,13 @@ namespace PhysicsLib.patches
                 // If the previous support entity still exists and the player hasn't fallen
                 // far enough to have genuinely left the surface, keep the support alive
                 // so carryDelta continues to be applied next frame.
-                if (prevSupportPhysics.TryTransformWorldPointToLocal(
-                        new Vec3d(finalX, finalY, finalZ), out Vector3 retainedAnchor))
+                if (prevSupportBody.TryWorldToLocal(
+                        newPosition, out Vector3 retainedAnchor))
                 {
                     // Check the retained anchor is still on top of the surface (not fallen through).
-                    if (prevSupportPhysics.TryGetPointVelocityDelta(retainedAnchor, out _))
+                    if (prevSupportBody.TryGetPointVelocityDelta(retainedAnchor, out _))
                     {
-                        SetStandingOnEntity(entity, prevSupport, retainedAnchor);
+                        SetStandingOnEntity(entity, prevSupport, retainedAnchor, newPosition);
                         // Don't set OnGround — we're not confirmed on the surface this frame,
                         // just preventing carryDelta from dropping to zero.
                     }
@@ -520,7 +472,6 @@ namespace PhysicsLib.patches
             {
                 ClearStandingOnEntity(entity);
             }
-            newPosition.Set(finalX, finalY, finalZ);
         }
 
         // ── helper: should we skip horizontal collision against this box? ─────────
@@ -544,6 +495,7 @@ namespace PhysicsLib.patches
             double delta = entityBox.Y1 - topY;
             return delta >= -SupportSnapUp && delta <= SupportProbeBelow;
         }
+        
 
         // ── swept AABB vs OBB along one world axis ────────────────────────────────
         // This replaces the old PushOutAxisObbAabb which mixed swept and depenetration

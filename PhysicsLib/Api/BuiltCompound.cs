@@ -1,11 +1,12 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Numerics;
 
 namespace PhysicsLib.Api
 {
-    public struct BuiltCompound
+    public class BuiltCompound
     {
         public Vector3 LocalCenterOfMassOffset;
-        public List<ManualChildBox> ManualChildBoxes;
+        public List<LocalBox> Boxes;
     }
 }

@@ -19,12 +19,12 @@ namespace PhysicsLib.Entities.Behaviours
         private PhysicsLibModSystem? physics;
         private string[]? selectors;
         private DebugRenderer? debugRenderer;
-
+        public Entity Entity { get; }
         private Vector3 localCenterOfMassOffset;
 
         // Shared across all instances of the same entity type — built once, never mutated.
-        private List<ManualChildBox> manualChildBoxes = new List<ManualChildBox>();
-        public List<ManualChildBox> VehicleChildBoxes = new List<ManualChildBox>();
+        private List<LocalBox> manualChildBoxes = new List<LocalBox>();
+        public List<LocalBox> VehicleChildBoxes = new List<LocalBox>();
         public bool isVehicle = false;
         // Per-instance pose tracking for carry delta.
         private Vec3d previousBodyPositionD = new Vec3d();
@@ -70,7 +70,6 @@ namespace PhysicsLib.Entities.Behaviours
                     shapeLoc.Path = "shapes/" + shapeLoc.Path + ".json";
 
                     cachedShape = physics.TryGetCompoundShape(shapeLoc.Path);
-                    //isVehicle = false;
                 }
             }
             else
@@ -104,13 +103,13 @@ namespace PhysicsLib.Entities.Behaviours
 
             if (isVehicle && cachedShape != null)
             {
-                VehicleChildBoxes = cachedShape.Value.ManualChildBoxes;
+                VehicleChildBoxes = cachedShape.Boxes;
             }
             else if (!isVehicle && cachedShape != null)
             {
-                manualChildBoxes = cachedShape.Value.ManualChildBoxes;
+                manualChildBoxes = cachedShape.Boxes;
             }
-            if (cachedShape != null) localCenterOfMassOffset = cachedShape.Value.LocalCenterOfMassOffset;
+            if (cachedShape != null) localCenterOfMassOffset = cachedShape.LocalCenterOfMassOffset;
         }
 
         public override void OnEntityDespawn(EntityDespawnData despawn)
@@ -130,10 +129,10 @@ namespace PhysicsLib.Entities.Behaviours
         public override void OnGameTick(float deltaTime)
         {
             base.OnGameTick(deltaTime);
-
+            
             if (api == null || !entity.Alive) return;
 
-            if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
+            if (!TryGetPose(out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return;
 
             if (!hasPreviousPose)
@@ -177,14 +176,14 @@ namespace PhysicsLib.Entities.Behaviours
             {
                 if (manualChildBoxes.Count == 0) return;
 
-                if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
+                if (!TryGetPose(out Vec3d bodyPosD, out Quaternion bodyOrientation))
                     return;
 
                 Matrix4x4 bodyRotationMatrix = Matrix4x4.CreateFromQuaternion(bodyOrientation);
 
                 for (int i = 0; i < manualChildBoxes.Count; i++)
                 {
-                    ManualChildBox child = manualChildBoxes[i];
+                    LocalBox child = manualChildBoxes[i];
 
                     Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
                     Vec3d worldCenterD = new Vec3d(
@@ -237,7 +236,7 @@ namespace PhysicsLib.Entities.Behaviours
                     return;
                 }
 
-                if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
+                if (!TryGetPose(out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 {
                     entity.Api.Logger.Event("[physicslib] Failed to get Collision Pose");
                     return;
@@ -245,7 +244,7 @@ namespace PhysicsLib.Entities.Behaviours
                 
                 Matrix4x4 bodyRotationMatrix = Matrix4x4.CreateFromQuaternion(bodyOrientation);
 
-                foreach (ManualChildBox child in VehicleChildBoxes)
+                foreach (LocalBox child in VehicleChildBoxes)
                 {
                     Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
                     Vec3d worldCenterD = new Vec3d(
@@ -290,7 +289,7 @@ namespace PhysicsLib.Entities.Behaviours
         {
             localPoint = Vector3.Zero;
 
-            if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
+            if (!TryGetPose(out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return false;
 
             Vector3 p = new Vector3(
@@ -320,7 +319,7 @@ namespace PhysicsLib.Entities.Behaviours
         public bool TryGetSupportTopYUnderBox(Cuboidd entityBox, double horizontalPadding, out double supportTopY)
         {
             supportTopY = 0.0;
-            if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation))
+            if (!TryGetPose(out Vec3d bodyPosD, out Quaternion bodyOrientation))
                 return false;
 
             bool found = false;
@@ -328,7 +327,7 @@ namespace PhysicsLib.Entities.Behaviours
 
             for (int i = 0; i < manualChildBoxes.Count; i++)
             {
-                ManualChildBox child = manualChildBoxes[i];
+                LocalBox child = manualChildBoxes[i];
                 Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
                 Vec3d wc = new Vec3d(bodyPosD.X + localOffset.X, bodyPosD.Y + localOffset.Y, bodyPosD.Z + localOffset.Z);
                 Cuboidd b = CreateAabbFromOrientedBox(wc, bodyOrientation, child.HalfExtents);
@@ -360,7 +359,7 @@ namespace PhysicsLib.Entities.Behaviours
         private BuiltCompound BuildCompoundFromShape(Shape shape)
         {
             var childMasses = new List<float>();
-            var manualBoxes = new List<ManualChildBox>();
+            var manualBoxes = new List<LocalBox>();
 
             if (shape.Elements == null || shape.Elements.Length == 0)
                 throw new InvalidOperationException("Shape has no root elements.");
@@ -379,17 +378,17 @@ namespace PhysicsLib.Entities.Behaviours
             Vector3 centerOfMass = ComputeCenterOfMass(manualBoxes, childMasses);
             for (int i = 0; i < manualBoxes.Count; i++)
             {
-                ManualChildBox b = manualBoxes[i];
+                LocalBox b = manualBoxes[i];
                 b.LocalPosition -= centerOfMass;
                 manualBoxes[i] = b;
             }
 
-            return new BuiltCompound { LocalCenterOfMassOffset = centerOfMass, ManualChildBoxes = manualBoxes };
+            return new BuiltCompound { LocalCenterOfMassOffset = centerOfMass, Boxes = manualBoxes };
         }
 
         private void AppendSelectedElementsRecursive(
             ShapeElement elem, Matrix4x4 parentWorld, string path,
-            bool parentSelected, List<float> childMasses, List<ManualChildBox> manualBoxes)
+            bool parentSelected, List<float> childMasses, List<LocalBox> manualBoxes)
         {
             bool selected = parentSelected || MatchesAnySelector(path);
             Matrix4x4 local = CreateVsElementLocalMatrix(elem, parentWorld.M11);
@@ -410,7 +409,7 @@ namespace PhysicsLib.Entities.Behaviours
 
                     Vector3 halfExtents = new Vector3(w * 0.5f * axisScale.X, h * 0.5f * axisScale.Y, l * 0.5f * axisScale.Z);
 
-                    manualBoxes.Add(new ManualChildBox { LocalPosition = childPosition, LocalOrientation = childOri, HalfExtents = halfExtents });
+                    manualBoxes.Add(new LocalBox { LocalPosition = childPosition, LocalOrientation = childOri, HalfExtents = halfExtents });
                     childMasses.Add(halfExtents.X * 2f * halfExtents.Y * 2f * halfExtents.Z * 2f);
                 }
             }
@@ -427,25 +426,44 @@ namespace PhysicsLib.Entities.Behaviours
 
         // ── pose ─────────────────────────────────────────────────────────────────
 
-        private bool TryGetCollisionPose(out Vector3 bodyPosition, out Vec3d bodyPositionDouble, out Quaternion bodyOrientation)
+        private bool TryGetPose(out Vec3d bodyPos, out Quaternion bodyOri)
         {
-            bodyPosition = Vector3.Zero;
-            bodyPositionDouble = new Vec3d();
-            bodyOrientation = Quaternion.Identity;
+            bodyPos = new Vec3d();
+            bodyOri = Quaternion.Identity;
 
             if (entity?.Pos == null) return false;
 
             EntityPos pos = entity.Pos;
 
-            bodyOrientation = ExtractPureRotation(
+            bodyOri = ExtractPureRotation(
                 Matrix4x4.CreateRotationY(MathF.PI / 2f) *
                 Matrix4x4.CreateFromYawPitchRoll(pos.Yaw, pos.Pitch, pos.Roll));
 
             Vector3 localOffset = Vector3.Transform(
-                new Vector3(-0.5f, 0f, -0.5f) + localCenterOfMassOffset, bodyOrientation);
+                new Vector3(-0.5f, 0f, -0.5f) + localCenterOfMassOffset, bodyOri);
 
-            bodyPositionDouble.Set(pos.X + localOffset.X, pos.Y + localOffset.Y, pos.Z + localOffset.Z);
-            bodyPosition = new Vector3((float)bodyPositionDouble.X, (float)bodyPositionDouble.Y, (float)bodyPositionDouble.Z);
+            bodyPos.Set(pos.X + localOffset.X, pos.Y + localOffset.Y, pos.Z + localOffset.Z);
+            return true;
+        }
+        
+        public bool TryLocalToWorld(Vector3 local, out Vec3d world)
+        {
+            world = new Vec3d();
+            if (!TryGetPose(out Vec3d bodyPos, out Quaternion bodyOri)) return false;
+            Vector3 offset = Vector3.Transform(local, bodyOri);
+            world.Set(bodyPos.X + offset.X, bodyPos.Y + offset.Y, bodyPos.Z + offset.Z);
+            return true;
+        }
+        
+        public bool TryWorldToLocal(Vec3d worldPoint, out Vector3 local)
+        {
+            local = Vector3.Zero;
+            if (!TryGetPose(out Vec3d bodyPos, out Quaternion bodyOri)) return false;
+            Vector3 rel = new(
+                (float)(worldPoint.X - bodyPos.X),
+                (float)(worldPoint.Y - bodyPos.Y),
+                (float)(worldPoint.Z - bodyPos.Z));
+            local = Vector3.Transform(rel, Quaternion.Inverse(bodyOri));
             return true;
         }
 
@@ -512,7 +530,7 @@ namespace PhysicsLib.Entities.Behaviours
             Vector3.TransformNormal(Vector3.UnitY, m).Length(),
             Vector3.TransformNormal(Vector3.UnitZ, m).Length());
 
-        private static Vector3 ComputeCenterOfMass(List<ManualChildBox> children, List<float> masses)
+        private static Vector3 ComputeCenterOfMass(List<LocalBox> children, List<float> masses)
         {
             float total = 0f; Vector3 sum = Vector3.Zero;
             for (int i = 0; i < children.Count; i++) { total += masses[i]; sum += children[i].LocalPosition * masses[i]; }
@@ -552,14 +570,14 @@ namespace PhysicsLib.Entities.Behaviours
         public void DebugRender(ICoreClientAPI capi)
         {
             if (capi == null || entity == null || !entity.Alive) return;
-            if (!TryGetCollisionPose(out _, out Vec3d bodyPosD, out Quaternion bodyOrientation)) return;
+            if (!TryGetPose(out Vec3d bodyPosD, out Quaternion bodyOrientation)) return;
 
             int color = ColorUtil.ToRgba(255, 0, 255, 0);
             Matrix4x4 bodyRotMat = Matrix4x4.CreateFromQuaternion(bodyOrientation);
 
             for (int i = 0; i < manualChildBoxes.Count; i++)
             {
-                ManualChildBox child = manualChildBoxes[i];
+                LocalBox child = manualChildBoxes[i];
                 Vector3 localOffset = Vector3.Transform(child.LocalPosition, bodyOrientation);
                 Vector3 worldCenter = new Vector3(
                     (float)(bodyPosD.X + localOffset.X),

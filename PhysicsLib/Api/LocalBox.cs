@@ -2,7 +2,7 @@
 
 namespace PhysicsLib.Api
 {
-    public struct ManualChildBox
+    public struct LocalBox
     {
         public Vector3 LocalPosition;
         public Quaternion LocalOrientation;
